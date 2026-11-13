@@ -58,7 +58,7 @@ final class GameWorld {
     // Key locations (surface)
     let spawn = SIMD3<Float>(0, 0, 78)
     let spawnYaw: Float = 0
-    let depositHouse = SIMD3<Float>(-14, 0, 28)        // bring metal here (no clue beam)
+    let depositHouse = SIMD3<Float>(-14, 0, 42)        // metal house near spawn (easy to find)
     let holeCenter = SIMD3<Float>(0, 0, 0)
     let escapeDoorPos = SIMD3<Float>(-22, 0, -55)
     let monsterDoorPos = SIMD3<Float>(22, 0, -55)
@@ -178,12 +178,14 @@ final class GameWorld {
 
         func addHouse(x: Float, z: Float) {
             let isDeposit = abs(x - depositHouse.x) < 1 && abs(z - depositHouse.z) < 1
-            let body = isDeposit
-                ? UIColor(red: 0.55, green: 0.45, blue: 0.15, alpha: 1)
-                : bodyColors[i % bodyColors.count]
-            let house = LegoBuilder.house(bodyColor: body, roofColor: roofColors[i % roofColors.count])
+            let house = LegoBuilder.house(
+                bodyColor: bodyColors[i % bodyColors.count],
+                roofColor: roofColors[i % roofColors.count],
+                metallic: isDeposit   // objective 2 house = shiny metal, easy to spot
+            )
             house.position = SCNVector3(x, 0, z)
-            house.eulerAngles = SCNVector3(0, Float.pi / 2 * Float(i % 4), 0)
+            // Metal house faces the main street so you see it coming from spawn.
+            house.eulerAngles = SCNVector3(0, isDeposit ? Float.pi : Float.pi / 2 * Float(i % 4), 0)
             scene.rootNode.addChildNode(house)
             houseRects.append((cx: x, cz: z, half: 2.1))
             housePositions.append(SIMD3<Float>(x, 0, z))

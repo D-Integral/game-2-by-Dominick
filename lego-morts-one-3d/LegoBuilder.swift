@@ -64,21 +64,36 @@ enum LegoBuilder {
     }
 
     /// A blocky LEGO house with a roof, a door and glowing windows.
-    static func house(bodyColor: UIColor, roofColor: UIColor) -> SCNNode {
+    static func house(bodyColor: UIColor, roofColor: UIColor, metallic: Bool = false) -> SCNNode {
         let root = SCNNode()
         let w: CGFloat = 3.2
         let h: CGFloat = 2.6
         let l: CGFloat = 3.0
 
         // Walls
-        let body = brick(width: w, height: h, length: l, color: bodyColor, studs: false)
+        let bodyColorFinal = metallic ? UIColor(white: 0.72, alpha: 1) : bodyColor
+        let bodyEmission = metallic ? UIColor(white: 0.18, alpha: 1) : nil
+        let body = brick(width: w, height: h, length: l, color: bodyColorFinal,
+                         studs: false, emission: bodyEmission)
+        if metallic, let mat = body.geometry?.materials.first {
+            mat.metalness.contents = 0.95
+            mat.roughness.contents = 0.25
+            mat.specular.contents = UIColor.white
+        }
         body.position = SCNVector3(0, Float(h / 2), 0)
         root.addChildNode(body)
 
         // Roof (a pyramid sitting on top of the walls)
         let roof = SCNNode(geometry: SCNPyramid(width: w + 0.5, height: 1.7, length: l + 0.5))
         let roofMat = SCNMaterial()
-        roofMat.diffuse.contents = roofColor
+        if metallic {
+            roofMat.diffuse.contents = UIColor(white: 0.45, alpha: 1)
+            roofMat.metalness.contents = 0.9
+            roofMat.roughness.contents = 0.3
+            roofMat.emission.contents = UIColor(white: 0.1, alpha: 1)
+        } else {
+            roofMat.diffuse.contents = roofColor
+        }
         roof.geometry?.materials = [roofMat]
         roof.position = SCNVector3(0, Float(h), 0)
         root.addChildNode(roof)
@@ -86,20 +101,39 @@ enum LegoBuilder {
         // Door
         let door = SCNBox(width: 0.85, height: 1.35, length: 0.12, chamferRadius: 0.02)
         let doorMat = SCNMaterial()
-        doorMat.diffuse.contents = UIColor(white: 0.06, alpha: 1)
+        if metallic {
+            doorMat.diffuse.contents = UIColor(white: 0.55, alpha: 1)
+            doorMat.metalness.contents = 1.0
+            doorMat.emission.contents = UIColor(white: 0.12, alpha: 1)
+        } else {
+            doorMat.diffuse.contents = UIColor(white: 0.06, alpha: 1)
+        }
         door.materials = [doorMat]
         let doorNode = SCNNode(geometry: door)
         doorNode.position = SCNVector3(0, 0.68, Float(l / 2) + 0.02)
         root.addChildNode(doorNode)
 
         // Two windows, randomly lit so the street feels alive (and scary)
-        let leftWindow = window(lit: Bool.random())
+        let leftWindow = window(lit: metallic ? true : Bool.random())
         leftWindow.position = SCNVector3(-0.95, 1.7, Float(l / 2) + 0.02)
         root.addChildNode(leftWindow)
 
-        let rightWindow = window(lit: Bool.random())
+        let rightWindow = window(lit: metallic ? true : Bool.random())
         rightWindow.position = SCNVector3(0.95, 1.7, Float(l / 2) + 0.02)
         root.addChildNode(rightWindow)
+
+        // Soft glow over the metal house so you can spot it at night.
+        if metallic {
+            let glow = SCNNode()
+            glow.light = SCNLight()
+            glow.light?.type = .omni
+            glow.light?.color = UIColor(white: 0.85, alpha: 1)
+            glow.light?.intensity = 350
+            glow.light?.attenuationStartDistance = 2
+            glow.light?.attenuationEndDistance = 18
+            glow.position = SCNVector3(0, 3.5, 0)
+            root.addChildNode(glow)
+        }
 
         return root
     }

@@ -336,7 +336,7 @@ final class GameDirector {
                 hint = "Tap once to hide in locker"
             }
         } else if objective == .buildRoads && !broughtToHouse {
-            hint = "No clues — find a house and bring the metal inside"
+            hint = "Find the shiny METAL house and bring the metal inside"
         }
         if hint != interactHint {
             interactHint = hint
@@ -383,8 +383,9 @@ final class GameDirector {
             setHUD("Metal: \(metalCarried) / \(firstMetalGoal)")
 
         case .buildRoads:
-            onObjective?("OBJECTIVE 2/8\nBring metal to a house — find 15 more (35 total)\nNo clues. Roads to every house.")
+            onObjective?("OBJECTIVE 2/8\nBring metal to the METAL house — find 15 more (35 total)\nRoads to every house.")
             setHUD("Deposited: \(metalDeposited) / \(totalMetalGoal)   Carried: \(metalCarried)")
+            onMessage?("Look for the shiny metal house!")
 
         case .metalRoom:
             // If we're not already in the room, this enter is called after fall.
