@@ -41,6 +41,9 @@ final class GameViewController: UIViewController {
     private let joyBase = UIView()
     private let joyKnob = UIView()
     private let deathView = UIView()
+    private let deathLabel = UILabel()
+    private let jumpscareView = UIView()
+    private let jumpscareLabel = UILabel()
     private let winView = UIView()
 
     private var clearMessageWork: DispatchWorkItem?
@@ -63,8 +66,8 @@ final class GameViewController: UIViewController {
         director.onMessage = { [weak self] text in
             Self.onMain { self?.showMessage(text) }
         }
-        director.onDeath = { [weak self] in
-            Self.onMain { self?.showDeath() }
+        director.onDeath = { [weak self] killer in
+            Self.onMain { self?.showJumpscare(killedBy: killer) }
         }
         director.onWin = { [weak self] in
             Self.onMain { self?.showWin() }
@@ -163,12 +166,31 @@ final class GameViewController: UIViewController {
         joyKnob.isHidden = true
         view.addSubview(joyKnob)
 
+        // Fullscreen jumpscare flash
+        jumpscareView.backgroundColor = .black
+        jumpscareView.isHidden = true
+        jumpscareView.isUserInteractionEnabled = false
+        jumpscareView.translatesAutoresizingMaskIntoConstraints = false
+        view.addSubview(jumpscareView)
+        jumpscareLabel.font = .systemFont(ofSize: 34, weight: .black)
+        jumpscareLabel.textColor = .red
+        jumpscareLabel.textAlignment = .center
+        jumpscareLabel.numberOfLines = 0
+        jumpscareLabel.translatesAutoresizingMaskIntoConstraints = false
+        jumpscareView.addSubview(jumpscareLabel)
+        pinCenter(jumpscareLabel, in: jumpscareView)
+
         deathView.backgroundColor = UIColor(red: 0.35, green: 0, blue: 0, alpha: 0.82)
         deathView.isHidden = true
         deathView.isUserInteractionEnabled = false
         deathView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(deathView)
-        let deathLabel = makeOverlayLabel("YOU DIED\n\nTap to revive\n(you lose all your metal & progress)")
+        deathLabel.text = "YOU DIED\n\nTap to revive\n(you lose all your metal & progress)"
+        deathLabel.font = .systemFont(ofSize: 26, weight: .heavy)
+        deathLabel.textColor = .white
+        deathLabel.textAlignment = .center
+        deathLabel.numberOfLines = 0
+        deathLabel.translatesAutoresizingMaskIntoConstraints = false
         deathView.addSubview(deathLabel)
         pinCenter(deathLabel, in: deathView)
 
@@ -201,6 +223,11 @@ final class GameViewController: UIViewController {
             hintLabel.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -10),
             hintLabel.leadingAnchor.constraint(equalTo: view.leadingAnchor, constant: 20),
             hintLabel.trailingAnchor.constraint(equalTo: view.trailingAnchor, constant: -20),
+
+            jumpscareView.topAnchor.constraint(equalTo: view.topAnchor),
+            jumpscareView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
+            jumpscareView.leadingAnchor.constraint(equalTo: view.leadingAnchor),
+            jumpscareView.trailingAnchor.constraint(equalTo: view.trailingAnchor),
 
             deathView.topAnchor.constraint(equalTo: view.topAnchor),
             deathView.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -274,6 +301,30 @@ final class GameViewController: UIViewController {
         }
         clearMessageWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 2.4, execute: work)
+    }
+
+    private func showJumpscare(killedBy: Killer) {
+        resetInput()
+        switch killedBy {
+        case .godRed:
+            jumpscareView.backgroundColor = UIColor(red: 0.55, green: 0, blue: 0, alpha: 1)
+            jumpscareLabel.text = "GOD RED\nEATS YOUR HEAD"
+            jumpscareLabel.textColor = .white
+        case .sonnelves:
+            jumpscareView.backgroundColor = UIColor(white: 0.92, alpha: 1)
+            jumpscareLabel.text = "SONNELVES\nTAKES YOUR HEART"
+            jumpscareLabel.textColor = .red
+        }
+        jumpscareView.alpha = 0
+        jumpscareView.isHidden = false
+        UIView.animate(withDuration: 0.08, animations: {
+            self.jumpscareView.alpha = 1
+        }, completion: { _ in
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.35) {
+                self.jumpscareView.isHidden = true
+                self.showDeath()
+            }
+        })
     }
 
     private func showDeath() {

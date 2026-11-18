@@ -19,32 +19,15 @@ final class GameWorld {
     private(set) var metals: [SCNNode] = []
     private(set) var housePositions: [SIMD3<Float>] = []
 
-    final class LeverItem {
-        let root = SCNNode()
-        let handle: SCNNode
-        let beam: SCNNode
-        var pulled = false
-        init() {
-            let made = Props.lever()
-            root.addChildNode(made.root)
-            handle = made.handle
-            beam = made.beam
-        }
-    }
-    private(set) var levers: [LeverItem] = []          // mid-game (3)
-    private(set) var finalLevers: [LeverItem] = []     // last objective (2)
-
     let holeNode = Props.hole()
     private(set) var metalDoorRoot = SCNNode()         // breakable door in metal room
     private(set) var metalDoorPanel = SCNNode()
-    private(set) var exitMetalDoorRoot = SCNNode()     // unbroken exit door
+    private(set) var exitMetalDoorRoot = SCNNode()     // closable metal gate
     private(set) var exitMetalDoorPanel = SCNNode()
     private(set) var escapeDoorRoot = SCNNode()
     private(set) var escapeDoorPanel = SCNNode()
     private(set) var monsterDoorRoot = SCNNode()
     private(set) var monsterDoorPanel = SCNNode()
-    private(set) var secretDoorRoot = SCNNode()
-    private(set) var secretDoorPanel = SCNNode()
     private(set) var lockers: [SCNNode] = []
     private let roadsRoot = SCNNode()
     private let metalRoomRoot = SCNNode()
@@ -63,13 +46,12 @@ final class GameWorld {
     let escapeDoorPos = SIMD3<Float>(-22, 0, -55)
     let monsterDoorPos = SIMD3<Float>(22, 0, -55)
     let exitGoal = SIMD3<Float>(0, 0, -84)
-    let secretDoorPos = SIMD3<Float>(0, 0, 40)
     let surfaceAfterRoom = SIMD3<Float>(18, 0, 8)
-    let leverSpots = [SIMD3<Float>(-64, 0, 64),
-                      SIMD3<Float>(70, 0, 8),
-                      SIMD3<Float>(-10, 0, -70)]
-    let finalLeverSpots = [SIMD3<Float>(-20, 0, 50),
-                           SIMD3<Float>(20, 0, 50)]
+    let portableLeverSpots = [SIMD3<Float>(-50, 0, 20),
+                              SIMD3<Float>(55, 0, -5),
+                              SIMD3<Float>(-25, 0, -45)]
+    let finalPortableLeverSpots = [SIMD3<Float>(-30, 0, 55),
+                                   SIMD3<Float>(25, 0, 60)]
 
     // Metal room (underground) positions — world space after room is placed at (0, roomY, 0)
     let roomY: Float = -14
@@ -79,10 +61,22 @@ final class GameWorld {
 
     private(set) var metalDoorClosed = true
     private(set) var metalDoorBroken = false
+    private(set) var gateClosed = false
     private(set) var choiceDoorsOpen = false
-    private(set) var secretDoorOpen = false
+    private(set) var elevatorOpen = false
     private(set) var inMetalRoom = false
     private(set) var roadsBuilt = false
+
+    // Portable levers (pick up / carry / place)
+    private(set) var portableLevers: [SCNNode] = []
+    private(set) var finalPortableLevers: [SCNNode] = []
+    let leverDepositPos = SIMD3<Float>(40, 0, -20)
+    let leverGatePos = SIMD3<Float>(28, 0, -20)       // metal door you carry levers through
+    let sonnelvesWaitPos = SIMD3<Float>(34, 0, -8)    // where Sonnelves waits
+    private(set) var leverGateRoot = SCNNode()
+    private(set) var leverDepositRoot = SCNNode()
+    private(set) var elevatorRoot = SCNNode()
+    private var finalDepositSlots: SCNNode?
 
     init() {
         setupEnvironment()
@@ -90,12 +84,13 @@ final class GameWorld {
         placeStreetLamps()
         placeBlood()
         placeMetals()
-        placeLevers()
-        placeFinalLevers()
         placeHoleAndDoors()
         buildMetalRoom()
         placeLockers()
-        placeSecretDoor()
+        placeLeverCarrySetup()
+        placeElevatorInMetalHouse()
+        placePortableLevers()
+        placeFinalPortableLevers()
 
         scene.rootNode.addChildNode(roadsRoot)
 
@@ -334,15 +329,28 @@ final class GameWorld {
             metalRoomRoot.addChildNode(wallNode)
         }
 
-        // Dim red lights
-        for x in [-10, 5, 14] as [Float] {
+        // Blue path lights to follow through the metal room.
+        for x in stride(from: Float(-12), through: 18, by: 5) {
+            let bulb = SCNNode(geometry: SCNSphere(radius: 0.35))
+            let bulbMat = SCNMaterial()
+            bulbMat.diffuse.contents = UIColor(red: 0.3, green: 0.6, blue: 1.0, alpha: 1)
+            bulbMat.emission.contents = UIColor(red: 0.2, green: 0.5, blue: 1.0, alpha: 1)
+            bulb.geometry?.materials = [bulbMat]
+            bulb.position = SCNVector3(x, 5.2, 0)
+            metalRoomRoot.addChildNode(bulb)
+
             let light = SCNNode()
             light.light = SCNLight()
             light.light?.type = .omni
-            light.light?.color = UIColor(red: 1.0, green: 0.25, blue: 0.2, alpha: 1)
-            light.light?.intensity = 500
-            light.position = SCNVector3(x, 5, 0)
+            light.light?.color = UIColor(red: 0.35, green: 0.65, blue: 1.0, alpha: 1)
+            light.light?.intensity = 700
+            light.position = SCNVector3(x, 5.2, 0)
             metalRoomRoot.addChildNode(light)
+
+            let beam = Props.goalBeam(color: UIColor(red: 0.25, green: 0.55, blue: 1.0, alpha: 1))
+            beam.position = SCNVector3(x, 0, 0)
+            beam.scale = SCNVector3(0.45, 0.35, 0.45)
+            metalRoomRoot.addChildNode(beam)
         }
 
         // Breakable door (starts closed) — local x=0
@@ -356,14 +364,15 @@ final class GameWorld {
         metalDoorClosed = true
         metalDoorBroken = false
 
-        // Unbroken exit door (open) — local x=16
+        // Metal gate at the end — open during the chase; player closes it to escape.
         let exit = Props.metalDoor()
         exitMetalDoorRoot = exit.root
         exitMetalDoorPanel = exit.doorPanel
         exitMetalDoorRoot.position = SCNVector3(16, 0, 0)
         exitMetalDoorRoot.eulerAngles = SCNVector3(0, -Float.pi / 2, 0)
-        exitMetalDoorPanel.position = SCNVector3(3.6, 2.4, 0) // open / not broken
+        exitMetalDoorPanel.position = SCNVector3(3.6, 2.4, 0) // open
         metalRoomRoot.addChildNode(exitMetalDoorRoot)
+        gateClosed = false
     }
 
     func enterMetalRoom() {
@@ -402,29 +411,24 @@ final class GameWorld {
         scene.rootNode.addChildNode(monsterDoorRoot)
     }
 
-    private func placeSecretDoor() {
-        let door = Props.choiceDoor(labelColor: UIColor(red: 0.9, green: 0.75, blue: 0.2, alpha: 1))
-        secretDoorRoot = door.root
-        secretDoorPanel = door.doorPanel
-        secretDoorRoot.simdPosition = secretDoorPos
-        secretDoorRoot.eulerAngles = SCNVector3(0, Float.pi, 0)
-        secretDoorPanel.position = SCNVector3(0, 2.4, 0) // closed until levers pulled
-        secretDoorRoot.isHidden = true
-        scene.rootNode.addChildNode(secretDoorRoot)
-    }
-
-    func showSecretDoor(_ show: Bool) {
-        secretDoorRoot.isHidden = !show
-        if show {
-            secretDoorOpen = false
-            secretDoorPanel.position = SCNVector3(0, 2.4, 0)
+    func closeMetalGate(completion: (() -> Void)? = nil) {
+        guard !gateClosed else {
+            DispatchQueue.main.async { completion?() }
+            return
+        }
+        gateClosed = true
+        let close = SCNAction.move(to: SCNVector3(0, 2.4, 0), duration: 0.4)
+        close.timingMode = .easeIn
+        exitMetalDoorPanel.runAction(close) {
+            DispatchQueue.main.async { completion?() }
         }
     }
 
-    func openSecretDoor() {
-        secretDoorOpen = true
-        let open = SCNAction.move(to: SCNVector3(3.6, 2.4, 0), duration: 0.5)
-        secretDoorPanel.runAction(open)
+    func resetMetalGate() {
+        gateClosed = false
+        exitMetalDoorPanel.removeAllActions()
+        exitMetalDoorPanel.position = SCNVector3(3.6, 2.4, 0)
+        exitMetalDoorPanel.isHidden = false
     }
 
     func breakMetalDoor(completion: (() -> Void)? = nil) {
@@ -454,6 +458,7 @@ final class GameWorld {
         metalDoorPanel.removeAllActions()
         metalDoorPanel.position = SCNVector3(0, 2.4, 0)
         metalDoorPanel.eulerAngles = SCNVector3Zero
+        resetMetalGate()
     }
 
     func showChoiceDoors(_ show: Bool) {
@@ -522,49 +527,149 @@ final class GameWorld {
         metals.forEach { $0.isHidden = false }
     }
 
-    // MARK: Levers
+    // MARK: Portable levers + carry door + deposit
 
-    private func placeLevers() {
-        for spot in leverSpots {
-            let lever = LeverItem()
-            lever.root.position = SCNVector3(spot.x, 0, spot.z)
-            lever.root.isHidden = true
-            scene.rootNode.addChildNode(lever.root)
-            levers.append(lever)
+    private func makePortableLever() -> SCNNode {
+        let made = Props.lever()
+        made.beam.isHidden = false
+        // Tint beam cyan so pickups are visible.
+        return made.root
+    }
+
+    private func placePortableLevers() {
+        for spot in portableLeverSpots {
+            let lever = makePortableLever()
+            lever.simdPosition = spot
+            lever.isHidden = true
+            scene.rootNode.addChildNode(lever)
+            portableLevers.append(lever)
         }
     }
 
-    private func placeFinalLevers() {
-        for spot in finalLeverSpots {
-            let lever = LeverItem()
-            lever.root.position = SCNVector3(spot.x, 0, spot.z)
-            lever.root.isHidden = true
-            scene.rootNode.addChildNode(lever.root)
-            finalLevers.append(lever)
+    private func placeFinalPortableLevers() {
+        for spot in finalPortableLeverSpots {
+            let lever = makePortableLever()
+            lever.simdPosition = spot
+            lever.isHidden = true
+            scene.rootNode.addChildNode(lever)
+            finalPortableLevers.append(lever)
         }
     }
 
-    func showLevers(_ show: Bool) {
-        levers.forEach { $0.root.isHidden = !show }
+    func showPortableLevers(_ show: Bool) {
+        portableLevers.forEach { $0.isHidden = !show; if show { $0.opacity = 1 } }
     }
 
-    func showFinalLevers(_ show: Bool) {
-        finalLevers.forEach { $0.root.isHidden = !show }
+    func showFinalPortableLevers(_ show: Bool) {
+        finalPortableLevers.forEach { $0.isHidden = !show; if show { $0.opacity = 1 } }
     }
 
-    func resetLevers() {
-        for lever in levers + finalLevers {
-            lever.pulled = false
-            lever.handle.removeAllActions()
-            lever.handle.eulerAngles = SCNVector3Zero
-            lever.beam.isHidden = false
+    func restorePortableLevers() {
+        for (i, lever) in portableLevers.enumerated() {
+            lever.isHidden = false
+            lever.opacity = 1
+            lever.simdPosition = portableLeverSpots[i]
+        }
+        for (i, lever) in finalPortableLevers.enumerated() {
+            lever.isHidden = true
+            lever.opacity = 1
+            lever.simdPosition = finalPortableLeverSpots[i]
         }
     }
 
-    func pull(_ lever: LeverItem) {
-        lever.pulled = true
-        lever.handle.runAction(SCNAction.rotateTo(x: -1.1, y: 0, z: 0, duration: 0.3))
-        lever.beam.isHidden = true
+    private func placeLeverCarrySetup() {
+        let gate = Props.metalDoor()
+        leverGateRoot = gate.root
+        leverGateRoot.simdPosition = leverGatePos
+        leverGateRoot.eulerAngles = SCNVector3(0, -Float.pi / 2, 0)
+        gate.doorPanel.position = SCNVector3(3.6, 2.4, 0) // open passage
+        leverGateRoot.isHidden = true
+        scene.rootNode.addChildNode(leverGateRoot)
+
+        // Deposit rack where carried levers are placed.
+        let rack = SCNNode()
+        let base = LegoBuilder.brick(width: 3.5, height: 0.4, length: 1.2,
+                                     color: UIColor(white: 0.25, alpha: 1),
+                                     emission: UIColor(white: 0.08, alpha: 1))
+        base.position = SCNVector3(0, 0.2, 0)
+        rack.addChildNode(base)
+        for i in 0..<3 {
+            let slot = LegoBuilder.brick(width: 0.35, height: 1.2, length: 0.35,
+                                         color: UIColor(red: 0.2, green: 0.5, blue: 0.9, alpha: 1),
+                                         emission: UIColor(red: 0.1, green: 0.25, blue: 0.5, alpha: 1))
+            slot.position = SCNVector3(Float(i - 1) * 1.0, 1.0, 0)
+            rack.addChildNode(slot)
+        }
+        let beam = Props.goalBeam(color: UIColor(red: 0.3, green: 0.7, blue: 1.0, alpha: 1))
+        rack.addChildNode(beam)
+        rack.simdPosition = leverDepositPos
+        rack.isHidden = true
+        leverDepositRoot = rack
+        scene.rootNode.addChildNode(rack)
+    }
+
+    func showLeverCarrySetup(_ show: Bool) {
+        leverGateRoot.isHidden = !show
+        leverDepositRoot.isHidden = !show
+    }
+
+    private func placeElevatorInMetalHouse() {
+        // Elevator shaft / secret door attached to the metal deposit house.
+        let elev = Props.choiceDoor(labelColor: UIColor(red: 0.4, green: 0.8, blue: 1.0, alpha: 1))
+        elevatorRoot = elev.root
+        elevatorRoot.simdPosition = SIMD3<Float>(depositHouse.x, 0, depositHouse.z + 3.5)
+        elevatorRoot.eulerAngles = SCNVector3(0, Float.pi, 0)
+        elev.doorPanel.position = SCNVector3(0, 2.4, 0) // closed
+        elevatorRoot.isHidden = true
+        scene.rootNode.addChildNode(elevatorRoot)
+
+        // Final deposit slots next to the elevator (for the last 2 levers).
+        let slots = SCNNode()
+        for i in 0..<2 {
+            let slot = LegoBuilder.brick(width: 0.4, height: 1.3, length: 0.4,
+                                         color: UIColor(red: 0.9, green: 0.75, blue: 0.2, alpha: 1),
+                                         emission: UIColor(red: 0.5, green: 0.4, blue: 0.05, alpha: 1))
+            slot.position = SCNVector3(Float(i) * 1.2 - 0.6, 0.7, -1.5)
+            slots.addChildNode(slot)
+        }
+        slots.simdPosition = SIMD3<Float>(depositHouse.x, 0, depositHouse.z + 3.5)
+        slots.isHidden = true
+        finalDepositSlots = slots
+        scene.rootNode.addChildNode(slots)
+    }
+
+    func showElevator(_ show: Bool) {
+        elevatorRoot.isHidden = !show
+        finalDepositSlots?.isHidden = !show
+        if show {
+            elevatorOpen = false
+            if let panel = elevatorRoot.childNodes.first(where: { $0.geometry is SCNBox && ($0.geometry as? SCNBox)?.width ?? 0 > 2 }) {
+                panel.position = SCNVector3(0, 2.4, 0)
+            }
+            // Reset elevator door panel (second child structure from Props.metalDoor).
+            elevatorRoot.enumerateChildNodes { node, _ in
+                if let box = node.geometry as? SCNBox, abs(box.width - 3.2) < 0.01 {
+                    node.position = SCNVector3(0, 2.4, 0)
+                }
+            }
+        }
+    }
+
+    func openElevator() {
+        elevatorOpen = true
+        elevatorRoot.enumerateChildNodes { node, _ in
+            if let box = node.geometry as? SCNBox, abs(box.width - 3.2) < 0.01 {
+                node.runAction(SCNAction.move(to: SCNVector3(3.6, 2.4, 0), duration: 0.55))
+            }
+        }
+    }
+
+    var elevatorPos: SIMD3<Float> {
+        SIMD3<Float>(depositHouse.x, 0, depositHouse.z + 3.5)
+    }
+
+    var finalDepositPos: SIMD3<Float> {
+        SIMD3<Float>(depositHouse.x, 0, depositHouse.z + 2.0)
     }
 
     // MARK: Collision
@@ -595,8 +700,9 @@ final class GameWorld {
         }
 
         if x < -bound || x > bound || z > bound || z < -bound - 6 { return true }
-        if secretDoorRoot.isHidden == false && !secretDoorOpen {
-            if abs(x - secretDoorPos.x) < 1.2 && abs(z - secretDoorPos.z) < 2.2 { return true }
+        if elevatorRoot.isHidden == false && !elevatorOpen {
+            let e = elevatorPos
+            if abs(x - e.x) < 1.2 && abs(z - e.z) < 1.5 { return true }
         }
         // Allow walking into deposit house footprint a bit (doorway).
         if nearDepositHouse(SIMD3<Float>(x, 0, z)) { return false }
