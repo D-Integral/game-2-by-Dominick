@@ -140,7 +140,7 @@ final class GameViewController: UIViewController {
         messageLabel.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(messageLabel)
 
-        hintLabel.text = "Left: run   •   Right: look   •   GOD RED chase: look back, stick flees"
+        hintLabel.text = "Left finger: run   •   Right finger: look (works while running)"
         hintLabel.font = .systemFont(ofSize: 12, weight: .medium)
         hintLabel.textColor = UIColor(white: 0.7, alpha: 1)
         hintLabel.textAlignment = .center
@@ -343,18 +343,18 @@ final class GameViewController: UIViewController {
                       duration: 3.2,
                       background: UIColor(red: 0.12, green: 0.05, blue: 0.02, alpha: 1)),
                 .init(title: "HE FALLS",
-                      body: "The rock slips.\nGOD RED falls into the dark.\nYou fall after him.",
+                      body: "GOD RED falls into the hole.\nYou fall after him\ninto the metal hallway.",
                       duration: 3.5,
                       background: UIColor(red: 0.05, green: 0.05, blue: 0.12, alpha: 1)),
-                .init(title: "HE CHASES",
-                      body: "GOD RED stands up in the metal room.\nHis four eyes find you.\nRUN.",
-                      duration: 3.5,
+                .init(title: "FROM THE HOLE",
+                      body: "GOD RED climbs out of the hole behind you.\n2 kilometers to the metal door.\nRUN — you can still look around!",
+                      duration: 3.8,
                       background: UIColor(red: 0.35, green: 0, blue: 0, alpha: 1))
             ]
         case .redBreaksDoor:
             beats = [
                 .init(title: "CUTSCENE 3",
-                      body: "GOD RED smashes the metal door!\nHe is behind you.\nRUN down the hallway — then the other way!",
+                      body: "The metal door!\nGOD RED smashes it.\nTurn LEFT and keep running!",
                       duration: 4.2,
                       background: UIColor(red: 0.3, green: 0.02, blue: 0.02, alpha: 1))
             ]
@@ -545,7 +545,9 @@ final class GameViewController: UIViewController {
                 }
                 joyKnob.center = CGPoint(x: moveOrigin.x + offset.x, y: moveOrigin.y + offset.y)
                 moveInput = SIMD2<Float>(Float(offset.x / joyRadius), Float(-offset.y / joyRadius))
-            } else if touch == lookTouch {
+            } else if touch == lookTouch || (moveTouch != nil && touch != moveTouch && touch != tapTouch) {
+                // Second finger always looks — even while the run stick is held.
+                if lookTouch == nil { lookTouch = touch }
                 let prev = touch.previousLocation(in: view)
                 let dx = Float(loc.x - prev.x)
                 let dy = Float(loc.y - prev.y)

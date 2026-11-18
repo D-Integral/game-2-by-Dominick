@@ -53,16 +53,18 @@ final class GameWorld {
     let finalPortableLeverSpots = [SIMD3<Float>(-30, 0, 55),
                                    SIMD3<Float>(25, 0, 60)]
 
-    // Metal room: long chase along +X, then the other way along +Z, then the gate.
-    // Lengths are playable (not literal 16/8 km) so you can outrun Red.
+    // Metal room: Red from the hole → run 2 km → metal door → turn left → run 1 km → gate.
     let roomY: Float = -14
-    let run16km: Float = 120
-    let run8km: Float = 60
+    let run16km: Float = 2_000   // first hall (2 km)
+    let run8km: Float = 1_000    // after left turn at the door
     let hallwayWidth: Float = 5
-    var metalRoomSpawn: SIMD3<Float> { SIMD3<Float>(2, roomY, 0) }
-    var breakDoorPos: SIMD3<Float> { SIMD3<Float>(18, roomY, 0) }
+    var metalRoomSpawn: SIMD3<Float> { SIMD3<Float>(8, roomY, 0) }
+    /// Hole entrance behind you — where GOD RED climbs out.
+    var redHoleSpawn: SIMD3<Float> { SIMD3<Float>(1.5, roomY, 0) }
+    /// Metal door at the end of the first 16 km.
+    var breakDoorPos: SIMD3<Float> { SIMD3<Float>(run16km, roomY, 0) }
     var turnJunction: SIMD3<Float> { SIMD3<Float>(run16km, roomY, 0) }
-    var exitDoorPos: SIMD3<Float> { SIMD3<Float>(run16km, roomY, run8km) } // metal gate
+    var exitDoorPos: SIMD3<Float> { SIMD3<Float>(run16km, roomY, run8km) } // metal gate after 8 km
     var postGateRunPos: SIMD3<Float> { SIMD3<Float>(run16km, roomY, run8km + 8) }
 
     // Little metal room + giant house (1000 long × 1000 high)
@@ -367,26 +369,29 @@ final class GameWorld {
         // Second leg: 8 km along +Z from the junction
         addCorridor(centerX: run16km, centerZ: run8km * 0.5, lengthX: w, lengthZ: run8km + 4)
 
-        // Blue lights along both legs.
-        for x in stride(from: Float(8), through: run16km, by: 12) {
+        // Blue lights along both halls.
+        for x in stride(from: Float(40), through: run16km, by: 80) {
             addBlueLight(at: SCNVector3(x, 4.4, 0))
         }
-        for z in stride(from: Float(8), through: run8km, by: 12) {
+        for z in stride(from: Float(40), through: run8km, by: 80) {
             addBlueLight(at: SCNVector3(run16km, 4.4, z))
         }
+        // Lights near the start / hole so you can see Red climb out.
+        addBlueLight(at: SCNVector3(5, 4.4, 0))
+        addBlueLight(at: SCNVector3(20, 4.4, 0))
 
-        // Breakable door early in the first corridor
+        // Breakable metal door at the END of the first 16 km.
         let breakable = Props.metalDoor()
         metalDoorRoot = breakable.root
         metalDoorPanel = breakable.doorPanel
-        metalDoorRoot.position = SCNVector3(18, 0, 0)
+        metalDoorRoot.position = SCNVector3(run16km, 0, 0)
         metalDoorRoot.eulerAngles = SCNVector3(0, -Float.pi / 2, 0)
-        metalDoorPanel.position = SCNVector3(0, 2.4, 0)
+        metalDoorPanel.position = SCNVector3(0, 2.4, 0) // closed until Red breaks it
         metalRoomRoot.addChildNode(metalDoorRoot)
         metalDoorClosed = true
         metalDoorBroken = false
 
-        // Gate at the end of the 8 km leg
+        // Gate at the end of the second 8 km leg
         let exit = Props.metalDoor()
         exitMetalDoorRoot = exit.root
         exitMetalDoorPanel = exit.doorPanel
@@ -420,9 +425,9 @@ final class GameWorld {
         inMetalRoom = true
         metalRoomRoot.isHidden = false
         holeNode.isHidden = true
-        scene.fogStartDistance = 25
-        scene.fogEndDistance = 90
-        player.cameraNode.camera?.zFar = 250
+        scene.fogStartDistance = 60
+        scene.fogEndDistance = 450
+        player.cameraNode.camera?.zFar = 900
     }
 
     func leaveMetalRoom() {
@@ -745,7 +750,7 @@ final class GameWorld {
             let inSecond = abs(x - run16km) <= half && z >= -half && z <= run8km + 4
             if !(inFirst || inSecond) { return true }
             if metalDoorClosed && !metalDoorBroken {
-                if abs(x - 18) < 0.9 && abs(z) < half + 0.2 { return true }
+                if abs(x - run16km) < 1.0 && abs(z) < half + 0.2 { return true }
             }
             if gateClosed {
                 // Seal behind the gate on the approach side.

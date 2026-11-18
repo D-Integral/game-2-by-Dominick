@@ -18,7 +18,7 @@ final class Player {
     private(set) var pitch: Float = 0
     let eyeHeight: Float = 2.3
 
-    private let lookSensitivity: Float = 0.0065
+    private let lookSensitivity: Float = 0.009
     private let maxPitch: Float = 1.35
 
     init() {
@@ -42,13 +42,15 @@ final class Player {
         cameraNode.addChildNode(flash)
     }
 
-    /// Turn the view from a finger drag (in screen points).
+    /// Turn the view from a finger drag (in screen points). Works while running.
     func look(dx: Float, dy: Float) {
+        // Cancel leftover camera actions so look is never frozen after cutscenes/falls.
+        cameraNode.removeAllActions()
         yaw -= dx * lookSensitivity
         pitch += dy * lookSensitivity
         pitch = max(-maxPitch, min(maxPitch, pitch))
-        node.eulerAngles.y = yaw
-        cameraNode.eulerAngles.x = pitch
+        node.eulerAngles = SCNVector3(0, yaw, 0)
+        cameraNode.eulerAngles = SCNVector3(pitch, 0, 0)
     }
 
     func place(at pos: SIMD3<Float>, yaw newYaw: Float) {
