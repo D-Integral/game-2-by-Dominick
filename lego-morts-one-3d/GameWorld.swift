@@ -53,18 +53,23 @@ final class GameWorld {
     let finalPortableLeverSpots = [SIMD3<Float>(-30, 0, 55),
                                    SIMD3<Float>(25, 0, 60)]
 
-    // Metal room: 1000cm (=10m) hallway. After the break, run another 100cm (=1m) to the gate.
+    // Metal room: run 16 km along +X, then another way 8 km along +Z, then the gate.
     let roomY: Float = -14
-    let hallwayLength: Float = 10
-    var metalRoomSpawn: SIMD3<Float> { SIMD3<Float>(0.8, roomY, 0) }
-    var breakDoorPos: SIMD3<Float> { SIMD3<Float>(4.0, roomY, 0) }
-    var exitDoorPos: SIMD3<Float> { SIMD3<Float>(9.0, roomY, 0) }      // metal gate
-    var postGateRunPos: SIMD3<Float> { SIMD3<Float>(10.2, roomY, 0) }  // +100cm past gate
+    let run16km: Float = 16_000
+    let run8km: Float = 8_000
+    let hallwayWidth: Float = 5
+    var metalRoomSpawn: SIMD3<Float> { SIMD3<Float>(2, roomY, 0) }
+    var breakDoorPos: SIMD3<Float> { SIMD3<Float>(40, roomY, 0) }
+    var turnJunction: SIMD3<Float> { SIMD3<Float>(run16km, roomY, 0) }
+    var exitDoorPos: SIMD3<Float> { SIMD3<Float>(run16km, roomY, run8km) } // metal gate
+    var postGateRunPos: SIMD3<Float> { SIMD3<Float>(run16km, roomY, run8km + 8) }
 
-    // Big square + giant house (10000cm = 100m)
+    // Little metal room + giant house (1000 long × 1000 high)
     let bigSquareCenter = SIMD3<Float>(0, 0, -40)
+    let littleMetalRoomPos = SIMD3<Float>(0, 0, -40)
     let giantHouseOrigin = SIMD3<Float>(0, 0, -40)
-    let giantHouseSize: Float = 100
+    let giantHouseSize: Float = 1000
+    let giantHouseHeight: Float = 1000
     private(set) var hasKey = false
     private(set) var lockedDoorOpen = false
     var keyNode = SCNNode()
@@ -72,9 +77,14 @@ final class GameWorld {
     var lockedRoomLever = SCNNode()
     var tunnelLever = SCNNode()
     var waterLever = SCNNode()
+    var houseEscapeDoor = SCNNode()
+    var houseEscapePos: SIMD3<Float> { SIMD3<Float>(giantHouseOrigin.x, 0, giantHouseOrigin.z - 10) }
+    private(set) var houseLockers: [SCNNode] = []
+    private var houseWallRects: [(cx: Float, cz: Float, hw: Float, hd: Float)] = []
     private var hazardHoles: [SIMD3<Float>] = []
     private let hazardRoot = SCNNode()
     var holesEnabled = true
+    var forceNoHoles = false
 
     private(set) var metalDoorClosed = true
     private(set) var metalDoorBroken = false
@@ -131,9 +141,9 @@ final class GameWorld {
         let night = UIColor(red: 0.02, green: 0.02, blue: 0.06, alpha: 1)
         scene.background.contents = night
         scene.fogColor = night
-        scene.fogStartDistance = 18
-        scene.fogEndDistance = 110
-        scene.fogDensityExponent = 1.2
+        scene.fogStartDistance = 40
+        scene.fogEndDistance = 280
+        scene.fogDensityExponent = 1.1
 
         let floor = SCNFloor()
         floor.reflectivity = 0
@@ -302,96 +312,116 @@ final class GameWorld {
     // MARK: Metal room
 
     private func buildMetalRoom() {
-        // 1000cm (=10m) long metal hallway along +X, from 0 to 10.
+        // L-shaped mega hallway: 16 km along +X, then 8 km along +Z.
         metalRoomRoot.simdPosition = SIMD3<Float>(0, roomY, 0)
         metalRoomRoot.isHidden = true
         scene.rootNode.addChildNode(metalRoomRoot)
 
         let metal = UIColor(white: 0.35, alpha: 1)
         let dark = UIColor(white: 0.15, alpha: 1)
-        let length = hallwayLength
-        let width: Float = 4
+        let w = hallwayWidth
 
-        let floor = SCNBox(width: CGFloat(length + 2), height: 0.4, length: CGFloat(width), chamferRadius: 0)
-        let floorMat = SCNMaterial()
-        floorMat.diffuse.contents = metal
-        floorMat.metalness.contents = 0.9
-        floorMat.emission.contents = UIColor(white: 0.05, alpha: 1)
-        floor.materials = [floorMat]
-        let floorNode = SCNNode(geometry: floor)
-        floorNode.position = SCNVector3(length * 0.5, 0, 0)
-        metalRoomRoot.addChildNode(floorNode)
+        func addCorridor(centerX: Float, centerZ: Float, lengthX: Float, lengthZ: Float) {
+            let floor = SCNBox(width: CGFloat(lengthX), height: 0.4, length: CGFloat(lengthZ), chamferRadius: 0)
+            let floorMat = SCNMaterial()
+            floorMat.diffuse.contents = metal
+            floorMat.metalness.contents = 0.9
+            floorMat.emission.contents = UIColor(white: 0.05, alpha: 1)
+            floor.materials = [floorMat]
+            let floorNode = SCNNode(geometry: floor)
+            floorNode.position = SCNVector3(centerX, 0, centerZ)
+            metalRoomRoot.addChildNode(floorNode)
 
-        let ceilNode = SCNNode(geometry: floor)
-        ceilNode.position = SCNVector3(length * 0.5, 5, 0)
-        metalRoomRoot.addChildNode(ceilNode)
+            let ceilNode = SCNNode(geometry: floor)
+            ceilNode.position = SCNVector3(centerX, 5, centerZ)
+            metalRoomRoot.addChildNode(ceilNode)
 
-        for zSide in [-1.0, 1.0] as [Double] {
-            let wall = SCNBox(width: CGFloat(length + 2), height: 5, length: 0.35, chamferRadius: 0)
             let wallMat = SCNMaterial()
             wallMat.diffuse.contents = dark
             wallMat.metalness.contents = 0.7
-            wall.materials = [wallMat]
-            let wallNode = SCNNode(geometry: wall)
-            wallNode.position = SCNVector3(length * 0.5, 2.5, Float(zSide) * width * 0.5)
-            metalRoomRoot.addChildNode(wallNode)
-        }
-        // End walls
-        for x in [Float(-0.2), length + 1.2] {
-            let wall = SCNBox(width: 0.35, height: 5, length: CGFloat(width), chamferRadius: 0)
-            let wallMat = SCNMaterial()
-            wallMat.diffuse.contents = dark
-            wall.materials = [wallMat]
-            let wallNode = SCNNode(geometry: wall)
-            wallNode.position = SCNVector3(x, 2.5, 0)
-            metalRoomRoot.addChildNode(wallNode)
-        }
 
-        // Blue lights every meter along the 10m hallway.
-        for x in stride(from: Float(1), through: length, by: 1.5) {
-            let bulb = SCNNode(geometry: SCNSphere(radius: 0.25))
-            let bulbMat = SCNMaterial()
-            bulbMat.diffuse.contents = UIColor(red: 0.3, green: 0.6, blue: 1.0, alpha: 1)
-            bulbMat.emission.contents = UIColor(red: 0.2, green: 0.55, blue: 1.0, alpha: 1)
-            bulb.geometry?.materials = [bulbMat]
-            bulb.position = SCNVector3(x, 4.4, 0)
-            metalRoomRoot.addChildNode(bulb)
-
-            let light = SCNNode()
-            light.light = SCNLight()
-            light.light?.type = .omni
-            light.light?.color = UIColor(red: 0.35, green: 0.65, blue: 1.0, alpha: 1)
-            light.light?.intensity = 650
-            light.position = SCNVector3(x, 4.4, 0)
-            metalRoomRoot.addChildNode(light)
+            if lengthX >= lengthZ {
+                // Corridor along X — side walls along Z edges
+                for zSide: Float in [-1, 1] {
+                    let wall = SCNBox(width: CGFloat(lengthX), height: 5, length: 0.4, chamferRadius: 0)
+                    wall.materials = [wallMat]
+                    let n = SCNNode(geometry: wall)
+                    n.position = SCNVector3(centerX, 2.5, centerZ + zSide * (lengthZ * 0.5))
+                    metalRoomRoot.addChildNode(n)
+                }
+            } else {
+                // Corridor along Z — side walls along X edges
+                for xSide: Float in [-1, 1] {
+                    let wall = SCNBox(width: 0.4, height: 5, length: CGFloat(lengthZ), chamferRadius: 0)
+                    wall.materials = [wallMat]
+                    let n = SCNNode(geometry: wall)
+                    n.position = SCNVector3(centerX + xSide * (lengthX * 0.5), 2.5, centerZ)
+                    metalRoomRoot.addChildNode(n)
+                }
+            }
         }
 
-        // Breakable door at 4m
+        // First leg: 16 km along +X
+        addCorridor(centerX: run16km * 0.5, centerZ: 0, lengthX: run16km + 4, lengthZ: w)
+        // Second leg: 8 km along +Z from the junction
+        addCorridor(centerX: run16km, centerZ: run8km * 0.5, lengthX: w, lengthZ: run8km + 4)
+
+        // Sparse blue lights (every ~400 m) so the chase stays readable.
+        for x in stride(from: Float(20), through: run16km, by: 400) {
+            addBlueLight(at: SCNVector3(x, 4.4, 0))
+        }
+        for z in stride(from: Float(20), through: run8km, by: 400) {
+            addBlueLight(at: SCNVector3(run16km, 4.4, z))
+        }
+
+        // Breakable door early in the first corridor
         let breakable = Props.metalDoor()
         metalDoorRoot = breakable.root
         metalDoorPanel = breakable.doorPanel
-        metalDoorRoot.position = SCNVector3(4, 0, 0)
+        metalDoorRoot.position = SCNVector3(40, 0, 0)
         metalDoorRoot.eulerAngles = SCNVector3(0, -Float.pi / 2, 0)
         metalDoorPanel.position = SCNVector3(0, 2.4, 0)
         metalRoomRoot.addChildNode(metalDoorRoot)
         metalDoorClosed = true
         metalDoorBroken = false
 
-        // Closable gate near the end (9m). After closing, run +1m to escape.
+        // Gate at the end of the 8 km leg
         let exit = Props.metalDoor()
         exitMetalDoorRoot = exit.root
         exitMetalDoorPanel = exit.doorPanel
-        exitMetalDoorRoot.position = SCNVector3(9, 0, 0)
-        exitMetalDoorRoot.eulerAngles = SCNVector3(0, -Float.pi / 2, 0)
+        exitMetalDoorRoot.position = SCNVector3(run16km, 0, run8km)
+        exitMetalDoorRoot.eulerAngles = SCNVector3(0, 0, 0)
         exitMetalDoorPanel.position = SCNVector3(3.6, 2.4, 0)
         metalRoomRoot.addChildNode(exitMetalDoorRoot)
         gateClosed = false
+    }
+
+    private func addBlueLight(at pos: SCNVector3) {
+        let bulb = SCNNode(geometry: SCNSphere(radius: 0.35))
+        let bulbMat = SCNMaterial()
+        bulbMat.diffuse.contents = UIColor(red: 0.3, green: 0.6, blue: 1.0, alpha: 1)
+        bulbMat.emission.contents = UIColor(red: 0.2, green: 0.55, blue: 1.0, alpha: 1)
+        bulb.geometry?.materials = [bulbMat]
+        bulb.position = pos
+        metalRoomRoot.addChildNode(bulb)
+
+        let light = SCNNode()
+        light.light = SCNLight()
+        light.light?.type = .omni
+        light.light?.color = UIColor(red: 0.35, green: 0.65, blue: 1.0, alpha: 1)
+        light.light?.intensity = 900
+        light.light?.attenuationEndDistance = 220
+        light.position = pos
+        metalRoomRoot.addChildNode(light)
     }
 
     func enterMetalRoom() {
         inMetalRoom = true
         metalRoomRoot.isHidden = false
         holeNode.isHidden = true
+        scene.fogStartDistance = 80
+        scene.fogEndDistance = 600
+        player.cameraNode.camera?.zFar = 1200
     }
 
     func leaveMetalRoom() {
@@ -399,6 +429,9 @@ final class GameWorld {
         metalRoomRoot.isHidden = true
         holeNode.isHidden = false
         godRed.park()
+        scene.fogStartDistance = 40
+        scene.fogEndDistance = 280
+        player.cameraNode.camera?.zFar = 2500
     }
 
     // MARK: Surface doors / hole
@@ -505,12 +538,15 @@ final class GameWorld {
     func nearestLocker(to point: SIMD3<Float>, within radius: Float) -> SCNNode? {
         var best: SCNNode?
         var bestDist = radius
-        for locker in lockers {
-            let d = simd_length(SIMD2<Float>(locker.simdPosition.x - point.x,
-                                             locker.simdPosition.z - point.z))
-            if d < bestDist {
-                bestDist = d
-                best = locker
+        let pools: [[SCNNode]] = [lockers, houseLockers]
+        for pool in pools {
+            for locker in pool where locker.isHidden == false {
+                let world = locker.presentation.worldPosition
+                let d = simd_length(SIMD2<Float>(world.x - point.x, world.z - point.z))
+                if d < bestDist {
+                    bestDist = d
+                    best = locker
+                }
             }
         }
         return best
@@ -703,14 +739,34 @@ final class GameWorld {
 
     func isBlocked(x: Float, z: Float) -> Bool {
         if inMetalRoom {
-            // 10m hallway along X, ~4m wide.
-            if x < 0.2 || x > hallwayLength + 1.0 || abs(z) > 1.7 { return true }
+            let half = hallwayWidth * 0.5 - 0.4
+            let inFirst = x >= 0.2 && x <= run16km + half && abs(z) <= half
+            let inSecond = abs(x - run16km) <= half && z >= -half && z <= run8km + 4
+            if !(inFirst || inSecond) { return true }
             if metalDoorClosed && !metalDoorBroken {
-                if abs(x - 4) < 0.8 && abs(z) < 1.8 { return true }
+                if abs(x - 40) < 0.9 && abs(z) < half + 0.2 { return true }
             }
-            // Closed gate seals Red behind (x < 9); player can pass on the far side.
             if gateClosed {
-                if x > 8.2 && x < 9.0 && abs(z) < 1.8 { return true }
+                // Seal behind the gate on the approach side.
+                if abs(x - run16km) < half && z > run8km - 1.2 && z < run8km { return true }
+            }
+            return false
+        }
+
+        // Giant house interior uses its own maze walls (much larger bounds).
+        if giantHouseRoot?.isHidden == false {
+            let o = giantHouseOrigin
+            let half = giantHouseSize * 0.5
+            if abs(x - o.x) > half - 1 || abs(z - o.z) > half - 1 { return true }
+            if !lockedDoorOpen {
+                let door = SIMD3<Float>(o.x - 80, 0, o.z - 120)
+                if abs(x - door.x) < 1.4 && abs(z - door.z) < 1.6 { return true }
+            }
+            for wall in houseWallRects {
+                if abs(x - (o.x + wall.cx)) < wall.hw + 0.6 &&
+                    abs(z - (o.z + wall.cz)) < wall.hd + 0.6 {
+                    return true
+                }
             }
             return false
         }
@@ -720,18 +776,13 @@ final class GameWorld {
             let e = elevatorPos
             if abs(x - e.x) < 1.2 && abs(z - e.z) < 1.5 { return true }
         }
-        // Locked room door in giant house (only while the house is active).
-        if giantHouseRoot?.isHidden == false && !lockedDoorOpen {
-            let door = SIMD3<Float>(giantHouseOrigin.x - 15, 0, giantHouseOrigin.z - 20)
-            if abs(x - door.x) < 1.2 && abs(z - door.z) < 1.5 { return true }
-        }
         if nearDepositHouse(SIMD3<Float>(x, 0, z)) { return false }
         return blockedByHouse(x: x, z: z, margin: 0.7)
     }
 
-    /// Deadly pit under the player? (disabled while monsters are hunting)
+    /// Deadly pit under the player? (disabled while monsters are hunting / forced off)
     func hazardHole(at point: SIMD3<Float>) -> Bool {
-        guard holesEnabled else { return false }
+        guard holesEnabled, !forceNoHoles else { return false }
         for hole in hazardHoles {
             if simd_length(SIMD2<Float>(point.x - hole.x, point.z - hole.z)) < 1.6 {
                 return true
@@ -757,19 +808,20 @@ final class GameWorld {
     }
 
     func setHazardHolesVisible(_ visible: Bool) {
-        hazardRoot.isHidden = !visible
-        holesEnabled = visible
+        let show = visible && !forceNoHoles
+        hazardRoot.isHidden = !show
+        holesEnabled = show
     }
 
-    // MARK: Giant house (100m x 100m) — key room, tunnel, underwater levers
+    // MARK: Giant house (1000 × 1000) + little metal room, maze walls, 10 lockers
 
     private func buildGiantHouse() {
-        let origin = giantHouseOrigin
         let size = giantHouseSize
+        let wallH = min(giantHouseHeight, 80) // playable wall height; ceiling scare uses height cue
         let root = SCNNode()
-        root.simdPosition = origin
+        root.simdPosition = giantHouseOrigin
+        houseWallRects.removeAll()
 
-        // Massive metal shell (simplified walls so it stays playable)
         let wallMat = SCNMaterial()
         wallMat.diffuse.contents = UIColor(white: 0.28, alpha: 1)
         wallMat.metalness.contents = 0.85
@@ -781,85 +833,142 @@ final class GameWorld {
         floorNode.position = SCNVector3(0, 0.1, 0)
         root.addChildNode(floorNode)
 
-        // Outer walls (short enough to see over from inside with fog)
+        // Outer shell
         for (dx, dz, w, l) in [
-            (Float(0), -size / 2, size, Float(1)),
-            (Float(0), size / 2, size, Float(1)),
-            (-size / 2, Float(0), Float(1), size),
-            (size / 2, Float(0), Float(1), size)
+            (Float(0), -size / 2, size, Float(2)),
+            (Float(0), size / 2, size, Float(2)),
+            (-size / 2, Float(0), Float(2), size),
+            (size / 2, Float(0), Float(2), size)
         ] as [(Float, Float, Float, Float)] {
-            let box = SCNBox(width: CGFloat(w), height: 12, length: CGFloat(l), chamferRadius: 0)
+            let box = SCNBox(width: CGFloat(w), height: CGFloat(wallH), length: CGFloat(l), chamferRadius: 0)
             box.materials = [wallMat]
             let n = SCNNode(geometry: box)
-            n.position = SCNVector3(dx, 6, dz)
+            n.position = SCNVector3(dx, wallH * 0.5, dz)
             root.addChildNode(n)
         }
 
-        // --- Locked room (needs key) ---
-        let roomX: Float = -20
-        let roomZ: Float = -20
-        // Walls with a doorway gap on the east side (+X).
+        // Lots of maze walls
+        let maze: [(Float, Float, Float, Float)] = [
+            (-200, -150, 180, 2), (100, -200, 2, 220), (250, 50, 200, 2),
+            (-300, 200, 2, 260), (0, 300, 280, 2), (350, -100, 2, 180),
+            (-100, 80, 140, 2), (180, 180, 2, 160), (-250, -50, 2, 200),
+            (50, -320, 240, 2), (-380, -250, 160, 2), (300, 280, 2, 200),
+            (-50, 400, 200, 2), (120, -50, 2, 140), (-180, 250, 160, 2),
+            (400, 0, 2, 300), (-400, 100, 2, 240), (0, -400, 300, 2),
+            (220, 400, 180, 2), (-320, 350, 140, 2)
+        ]
+        for (cx, cz, w, d) in maze {
+            let box = SCNBox(width: CGFloat(w), height: 8, length: CGFloat(d), chamferRadius: 0)
+            box.materials = [wallMat]
+            let n = SCNNode(geometry: box)
+            n.position = SCNVector3(cx, 4, cz)
+            root.addChildNode(n)
+            houseWallRects.append((cx, cz, w * 0.5, d * 0.5))
+        }
+
+        // --- Little metal room (escape door lives here) ---
+        let littleMat = SCNMaterial()
+        littleMat.diffuse.contents = UIColor(white: 0.4, alpha: 1)
+        littleMat.metalness.contents = 0.95
+        littleMat.emission.contents = UIColor(white: 0.08, alpha: 1)
         for (dx, dz, w, l) in [
-            (roomX, roomZ - 4, Float(10), Float(0.5)),
-            (roomX, roomZ + 4, Float(10), Float(0.5)),
-            (roomX - 5, roomZ, Float(0.5), Float(8)),
-            (roomX + 5, roomZ - 2.8, Float(0.5), Float(2.4)),
-            (roomX + 5, roomZ + 2.8, Float(0.5), Float(2.4))
+            (Float(0), Float(-10), Float(16), Float(0.5)),
+            (Float(-8), Float(-4), Float(0.5), Float(12)),
+            (Float(8), Float(-4), Float(0.5), Float(12)),
+            (Float(0), Float(2), Float(16), Float(0.5))
+        ] as [(Float, Float, Float, Float)] {
+            let box = SCNBox(width: CGFloat(w), height: 5, length: CGFloat(l), chamferRadius: 0)
+            box.materials = [littleMat]
+            let n = SCNNode(geometry: box)
+            n.position = SCNVector3(dx, 2.5, dz)
+            root.addChildNode(n)
+            houseWallRects.append((dx, dz, w * 0.5, l * 0.5))
+        }
+        // Opening on +Z side of little room (entrance from house)
+        houseWallRects.removeAll { abs($0.cx) < 0.1 && abs($0.cz - 2) < 0.1 }
+
+        let escape = Props.metalDoor()
+        houseEscapeDoor = escape.root
+        houseEscapeDoor.position = SCNVector3(0, 0, -10)
+        escape.doorPanel.position = SCNVector3(3.6, 2.4, 0)
+        root.addChildNode(houseEscapeDoor)
+
+        // --- Locked room (needs key) ---
+        let roomX: Float = -80
+        let roomZ: Float = -120
+        for (dx, dz, w, l) in [
+            (roomX, roomZ - 6, Float(14), Float(0.5)),
+            (roomX, roomZ + 6, Float(14), Float(0.5)),
+            (roomX - 7, roomZ, Float(0.5), Float(12)),
+            (roomX + 7, roomZ - 3.5, Float(0.5), Float(5)),
+            (roomX + 7, roomZ + 3.5, Float(0.5), Float(5))
         ] as [(Float, Float, Float, Float)] {
             let box = SCNBox(width: CGFloat(w), height: 5, length: CGFloat(l), chamferRadius: 0)
             box.materials = [wallMat]
             let n = SCNNode(geometry: box)
             n.position = SCNVector3(dx, 2.5, dz)
             root.addChildNode(n)
+            houseWallRects.append((dx, dz, w * 0.5, l * 0.5))
         }
         let door = Props.metalDoor()
         lockedRoomDoor = door.root
-        lockedRoomDoor.position = SCNVector3(roomX + 5, 0, roomZ)
+        lockedRoomDoor.position = SCNVector3(roomX + 7, 0, roomZ)
         lockedRoomDoor.eulerAngles = SCNVector3(0, -Float.pi / 2, 0)
-        door.doorPanel.position = SCNVector3(0, 2.4, 0) // closed
+        door.doorPanel.position = SCNVector3(0, 2.4, 0)
         root.addChildNode(lockedRoomDoor)
 
         lockedRoomLever = makePortableLever()
         lockedRoomLever.position = SCNVector3(roomX, 0, roomZ)
         root.addChildNode(lockedRoomLever)
 
-        // Key outside the locked room
         let key = LegoBuilder.brick(width: 0.5, height: 0.2, length: 1.0,
                                     color: UIColor(red: 1, green: 0.85, blue: 0.2, alpha: 1),
                                     emission: UIColor(red: 0.6, green: 0.5, blue: 0.05, alpha: 1))
         keyNode = key
-        keyNode.position = SCNVector3(roomX + 12, 1.0, roomZ + 8)
-        let keySpin = SCNAction.repeatForever(SCNAction.rotateBy(x: 0, y: .pi * 2, z: 0, duration: 2))
-        keyNode.runAction(keySpin)
+        keyNode.position = SCNVector3(roomX + 30, 1.0, roomZ + 20)
+        keyNode.runAction(SCNAction.repeatForever(SCNAction.rotateBy(x: 0, y: .pi * 2, z: 0, duration: 2)))
         root.addChildNode(keyNode)
 
         // --- Tunnel lever ---
-        let tunnel = SCNBox(width: 4, height: 3, length: 20, chamferRadius: 0)
+        let tunnel = SCNBox(width: 5, height: 3.5, length: 40, chamferRadius: 0)
         let tunnelMat = SCNMaterial()
         tunnelMat.diffuse.contents = UIColor(white: 0.18, alpha: 1)
         tunnel.materials = [tunnelMat]
         let tunnelNode = SCNNode(geometry: tunnel)
-        tunnelNode.position = SCNVector3(25, 1.5, 10)
+        tunnelNode.position = SCNVector3(200, 1.7, 100)
         root.addChildNode(tunnelNode)
-        // Hollow-ish opening markers
         tunnelLever = makePortableLever()
-        tunnelLever.position = SCNVector3(25, 0, 18)
+        tunnelLever.position = SCNVector3(200, 0, 115)
         root.addChildNode(tunnelLever)
 
         // --- Underwater lever ---
-        let pool = SCNBox(width: 14, height: 2.5, length: 14, chamferRadius: 0)
+        let pool = SCNBox(width: 22, height: 3, length: 22, chamferRadius: 0)
         let waterMat = SCNMaterial()
         waterMat.diffuse.contents = UIColor(red: 0.1, green: 0.35, blue: 0.7, alpha: 0.45)
         waterMat.transparency = 0.55
         waterMat.isDoubleSided = true
         pool.materials = [waterMat]
         let poolNode = SCNNode(geometry: pool)
-        poolNode.position = SCNVector3(-25, 0.8, 25)
+        poolNode.position = SCNVector3(-220, 0.9, 180)
         root.addChildNode(poolNode)
-
         waterLever = makePortableLever()
-        waterLever.position = SCNVector3(-25, -0.2, 25)
+        waterLever.position = SCNVector3(-220, -0.2, 180)
         root.addChildNode(waterLever)
+
+        // 10 lockers to hide from Sonnelves
+        houseLockers.removeAll()
+        let lockerSpots: [SIMD3<Float>] = [
+            SIMD3(30, 0, -20), SIMD3(-40, 0, 40), SIMD3(90, 0, 60),
+            SIMD3(-120, 0, -40), SIMD3(150, 0, -80), SIMD3(-60, 0, 140),
+            SIMD3(70, 0, 200), SIMD3(-200, 0, 40), SIMD3(250, 0, -40),
+            SIMD3(20, 0, -150)
+        ]
+        for spot in lockerSpots {
+            let locker = Props.locker()
+            locker.position = SCNVector3(spot.x, 0, spot.z)
+            root.addChildNode(locker)
+            houseLockers.append(locker)
+        }
 
         root.isHidden = true
         root.name = "giantHouse"
@@ -872,6 +981,8 @@ final class GameWorld {
 
     func showGiantHouse(_ show: Bool) {
         giantHouseRoot?.isHidden = !show
+        forceNoHoles = show
+        setHazardHolesVisible(!show)
         if show {
             hasKey = false
             lockedDoorOpen = false
@@ -900,7 +1011,7 @@ final class GameWorld {
 
     func tryUnlockDoor(at point: SIMD3<Float>) -> Bool {
         guard hasKey, !lockedDoorOpen else { return false }
-        let door = SIMD3<Float>(giantHouseOrigin.x - 15, 0, giantHouseOrigin.z - 20)
+        let door = SIMD3<Float>(giantHouseOrigin.x - 80 + 7, 0, giantHouseOrigin.z - 120)
         if simd_length(SIMD2<Float>(point.x - door.x, point.z - door.z)) < 4 {
             lockedDoorOpen = true
             lockedRoomDoor.enumerateChildNodes { node, _ in
@@ -914,8 +1025,12 @@ final class GameWorld {
     }
 
     func isInWater(at point: SIMD3<Float>) -> Bool {
-        let pool = SIMD3<Float>(giantHouseOrigin.x - 25, 0, giantHouseOrigin.z + 25)
-        return abs(point.x - pool.x) < 7 && abs(point.z - pool.z) < 7
+        let pool = SIMD3<Float>(giantHouseOrigin.x - 220, 0, giantHouseOrigin.z + 180)
+        return abs(point.x - pool.x) < 11 && abs(point.z - pool.z) < 11
+    }
+
+    func nearHouseEscape(_ point: SIMD3<Float>) -> Bool {
+        simd_length(SIMD2<Float>(point.x - houseEscapePos.x, point.z - houseEscapePos.z)) < 3.5
     }
 
     func respawnPlayer() {

@@ -334,19 +334,41 @@ final class GameViewController: UIViewController {
                       duration: 4.0,
                       background: UIColor(red: 0.08, green: 0.1, blue: 0.05, alpha: 1))
             ]
-        case .redFallsHole:
+        case .redTakesRock:
             beats = [
                 .init(title: "CUTSCENE 2",
-                      body: "GOD RED falls down the hole...\nYou tumble after him\ninto the metal room.",
-                      duration: 4.0,
-                      background: UIColor(red: 0.05, green: 0.05, blue: 0.12, alpha: 1))
+                      body: "GOD RED pulls a rock from the hole...",
+                      duration: 3.2,
+                      background: UIColor(red: 0.12, green: 0.05, blue: 0.02, alpha: 1)),
+                .init(title: "HE FALLS",
+                      body: "The rock slips.\nGOD RED falls into the dark.\nYou fall after him.",
+                      duration: 3.5,
+                      background: UIColor(red: 0.05, green: 0.05, blue: 0.12, alpha: 1)),
+                .init(title: "HE CHASES",
+                      body: "GOD RED stands up in the metal room.\nHis four eyes find you.\nRUN.",
+                      duration: 3.5,
+                      background: UIColor(red: 0.35, green: 0, blue: 0, alpha: 1))
             ]
         case .redBreaksDoor:
             beats = [
                 .init(title: "CUTSCENE 3",
-                      body: "GOD RED smashes the metal door!\nThe hallway shakes.\nRun — another 100 centimeters!",
-                      duration: 4.0,
+                      body: "GOD RED smashes the metal door!\nRun 16 kilometers...\nthen another way — 8 kilometers!",
+                      duration: 4.2,
                       background: UIColor(red: 0.3, green: 0.02, blue: 0.02, alpha: 1))
+            ]
+        case .sonnelvesCeiling:
+            beats = [
+                .init(title: "SONNELVES",
+                      body: "Something white moves on the ceiling...\nSONNELVES drops into the giant house.\nHide in the 10 lockers!",
+                      duration: 4.5,
+                      background: UIColor(white: 0.92, alpha: 1))
+            ]
+        case .escapeVillage:
+            beats = [
+                .init(title: "ESCAPE",
+                      body: "You have 2 minutes and 30 seconds.\nIf time runs out — you die.\nHide. Run. Reach the north exit.",
+                      duration: 4.5,
+                      background: UIColor(red: 0.08, green: 0.02, blue: 0.02, alpha: 1))
             ]
         }
         cutscenes.play(on: view, beats: beats, completion: completion)
@@ -417,26 +439,24 @@ final class GameViewController: UIViewController {
 
     private func showJumpscare(killedBy: Killer) {
         resetInput()
+        // Always show GOD RED + SONNELVES killing you together.
+        jumpscareView.backgroundColor = UIColor(red: 0.35, green: 0, blue: 0, alpha: 1)
+        jumpscareLabel.textColor = .white
         switch killedBy {
-        case .godRed:
-            jumpscareView.backgroundColor = UIColor(red: 0.55, green: 0, blue: 0, alpha: 1)
-            jumpscareLabel.text = "GOD RED\nEATS YOUR HEAD"
-            jumpscareLabel.textColor = .white
-        case .sonnelves:
-            jumpscareView.backgroundColor = UIColor(white: 0.92, alpha: 1)
-            jumpscareLabel.text = "SONNELVES\nTAKES YOUR HEART"
-            jumpscareLabel.textColor = .red
-        case .hole:
-            jumpscareView.backgroundColor = UIColor(red: 0.05, green: 0.05, blue: 0.12, alpha: 1)
-            jumpscareLabel.text = "YOU FELL\nINTO THE HOLE"
-            jumpscareLabel.textColor = UIColor(white: 0.85, alpha: 1)
+        case .godRed, .sonnelves, .hole, .timeout:
+            jumpscareLabel.text = "GOD RED EATS YOUR HEAD\n\nSONNELVES TAKES YOUR HEART"
+        }
+        if killedBy == .hole {
+            jumpscareLabel.text = "YOU LOOK UP...\n\nGOD RED EATS YOUR HEAD\nSONNELVES TAKES YOUR HEART"
+        } else if killedBy == .timeout {
+            jumpscareLabel.text = "TIME RAN OUT\n\nGOD RED EATS YOUR HEAD\nSONNELVES TAKES YOUR HEART"
         }
         jumpscareView.alpha = 0
         jumpscareView.isHidden = false
         UIView.animate(withDuration: 0.08, animations: {
             self.jumpscareView.alpha = 1
         }, completion: { _ in
-            DispatchQueue.main.asyncAfter(deadline: .now() + 1.35) {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) {
                 self.jumpscareView.isHidden = true
                 self.showDeath()
             }

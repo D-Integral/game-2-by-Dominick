@@ -23,7 +23,7 @@ final class Player {
 
     init() {
         cameraNode.camera = SCNCamera()
-        cameraNode.camera?.zFar = 500
+        cameraNode.camera?.zFar = 2500
         cameraNode.camera?.fieldOfView = 75
         cameraNode.position = SCNVector3(0, eyeHeight, 0)
         node.addChildNode(cameraNode)
@@ -99,6 +99,20 @@ final class Player {
             if child.light != nil {
                 child.light?.intensity = hidden ? 120 : 1500
             }
+        }
+    }
+
+    /// Look straight up (e.g. falling into a hole), then call completion.
+    func lookUpThenDie(duration: TimeInterval = 1.1, completion: @escaping () -> Void) {
+        cameraNode.removeAllActions()
+        let look = SCNAction.customAction(duration: duration) { [weak self] _, elapsed in
+            guard let self else { return }
+            let t = Float(elapsed / CGFloat(duration))
+            self.pitch = -self.maxPitch * min(1, t)
+            self.cameraNode.eulerAngles.x = self.pitch
+        }
+        cameraNode.runAction(look) {
+            DispatchQueue.main.async { completion() }
         }
     }
 
