@@ -5,12 +5,12 @@
 //  Objectives (8):
 //  1 Collect 20 metals
 //  2 Metal house deposit + roads
-//  3 Metal room: blue lights → door break → run 30s → close gate
-//  4 Run from GOD RED for 2:30
-//  5 Carry 3 levers through metal door, place them (Sonnelves waits)
+ //  3 Metal room: blue lights → door break → run 100cm → close gate
+//  4 Big square / giant house: 3 levers (key room, tunnel, underwater)
+//  5 Run from GOD RED for 2:30
 //  6 Escape village with lockers
 //  7 Take 2 final levers
-//  8 Place levers → elevator in metal house → win
+ //  8 Place levers → elevator in metal house → win
 //
 
 import UIKit
@@ -20,6 +20,7 @@ import simd
 enum Killer {
     case godRed
     case sonnelves
+    case hole
 }
 
 final class GameDirector {
@@ -28,11 +29,11 @@ final class GameDirector {
         case collectMetal
         case buildRoads
         case metalRoom
+        case giantHouse
         case escapeRed
-        case carryLevers
         case escapeVillage
-        case findFinalLevers   // pick up 2 levers
-        case elevatorEnd       // place 2 levers → elevator in metal house
+        case findFinalLevers
+        case elevatorEnd
         case won
     }
 
@@ -40,8 +41,9 @@ final class GameDirector {
         case goToHole
         case followBlue
         case doorBreaking
-        case runThirty
+        case runHundred
         case closeGate
+        case runPastGate
     }
 
     private let world: GameWorld
@@ -52,11 +54,13 @@ final class GameDirector {
     private let firstMetalGoal = 20
     private let totalMetalGoal = 35
 
-    private var leversCarried = 0
-    private var leversPlaced = 0
+    private var giantLeversTaken = 0
+    private var tookLockedLever = false
+    private var tookTunnelLever = false
+    private var tookWaterLever = false
+
     private var finalLeversCarried = 0
     private var finalLeversPlaced = 0
-    private var passedLeverGate = false
 
     private(set) var isDead = false
     private var surviveTimer: Float = 0
@@ -64,20 +68,19 @@ final class GameDirector {
     private var doorBreakStarted = false
     private var broughtToHouse = false
     private var roomPhase: MetalRoomPhase = .goToHole
+    private var cutsceneDoorPlayed = false
 
     private var redChasing = false
     private var sonChasing = false
-    private var sonWaiting = false
 
     private let playerSpeed: Float = 10.0
-    private let monsterRunSpeed: Float = 11.5   // monsters RUN
+    private let monsterRunSpeed: Float = 11.5
     private let catchRadius: Float = 2.5
     private let pickupRadius: Float = 2.2
     private let goalRadius: Float = 4.5
     private let holeRadius: Float = 2.8
     private let lockerRadius: Float = 2.4
-    private let redChaseSeconds: Float = 150    // 2 minutes 30 seconds
-    private let roomRunSeconds: Float = 30
+    private let redChaseSeconds: Float = 150
 
     var onObjective: ((String) -> Void)?
     var onHUD: ((String) -> Void)?
@@ -85,26 +88,42 @@ final class GameDirector {
     var onDeath: ((Killer) -> Void)?
     var onWin: (() -> Void)?
     var onInteractHint: ((String?) -> Void)?
+    var onCutscene: ((CutsceneKind, @escaping () -> Void) -> Void)?
+    var onSaveProgress: ((Int) -> Void)?
+
+    enum CutsceneKind {
+        case wakeVillage
+        case redFallsHole
+        case redBreaksDoor
+    }
 
     private var lastHUD = ""
     private var interactHint: String?
+    private var playingCutscene = false
 
     init(world: GameWorld) {
         self.world = world
     }
 
-    func start() {
-        enter(.collectMetal)
+    func start(at objectiveRaw: Int? = nil) {
+        if let raw = objectiveRaw, let saved = Objective(rawValue: raw), saved != .won {
+            restore(to: saved)
+        } else {
+            enter(.collectMetal, playWake: true)
+        }
     }
 
     func update(dt: Float, move: SIMD2<Float>) {
-        guard !isDead, objective != .won else { return }
+        guard !isDead, objective != .won, !playingCutscene else { return }
         if falling { return }
+
+        updateHazardVisibility()
 
         if !world.player.isHiding {
             movePlayer(dt: dt, move: move)
         }
         updateMonsters(dt: dt)
+        checkHazardDeath()
         updateObjective(dt: dt)
         updateInteractHint()
         checkCatch()
@@ -120,8 +139,35 @@ final class GameDirector {
         var pos = world.player.position
         if !world.isBlocked(x: pos.x + delta.x, z: pos.z) { pos.x += delta.x }
         if !world.isBlocked(x: pos.x, z: pos.z + delta.z) { pos.z += delta.z }
-        pos.y = world.inMetalRoom ? world.roomY : 0
+        if world.inMetalRoom {
+            pos.y = world.roomY
+        } else if world.isInWater(at: pos) {
+            pos.y = -0.6
+        } else {
+            pos.y = 0
+        }
         world.player.position = pos
+    }
+
+    private func updateHazardVisibility() {
+        let monstersActive = redChasing || sonChasing
+        world.setHazardHolesVisible(!monstersActive && !world.inMetalRoom)
+    }
+
+    private func checkHazardDeath() {
+        guard !world.inMetalRoom else { return }
+        // Story hole is used to enter the metal room — don't treat it as lethal then.
+        if objective == .metalRoom && roomPhase == .goToHole { return }
+        if world.hazardHole(at: world.player.position) {
+            die(killedBy: .hole)
+            return
+        }
+        // Falling into the center story hole outside the entry phase also kills.
+        if objective != .metalRoom || roomPhase != .goToHole {
+            if dist(world.holeCenter) < holeRadius * 0.85 {
+                die(killedBy: .hole)
+            }
+        }
     }
 
     private func updateMonsters(dt: Float) {
@@ -140,14 +186,6 @@ final class GameDirector {
         if sonChasing {
             world.sonnelves.chase(toward: world.player.position, speed: monsterRunSpeed * 1.05, dt: dt, keepY: 0)
             world.sonnelves.updateWalk(dt: dt)
-        } else if sonWaiting {
-            world.sonnelves.setRunning(false)
-            // Start chase if player gets close to the wait spot / Sonnelves.
-            if world.sonnelves.groundDistance(to: world.player.position) < 12 {
-                sonWaiting = false
-                sonChasing = true
-                onMessage?("SONNELVES saw you!")
-            }
         } else {
             world.sonnelves.setRunning(false)
         }
@@ -155,7 +193,8 @@ final class GameDirector {
 
     private func checkCatch() {
         if world.player.isHiding { return }
-        let redBlocked = objective == .metalRoom && roomPhase == .doorBreaking
+        let redBlocked = objective == .metalRoom &&
+            (roomPhase == .doorBreaking || (world.gateClosed && world.player.position.x > 9))
         if redChasing && !redBlocked &&
             world.godRed.groundDistance(to: world.player.position) < catchRadius {
             die(killedBy: .godRed)
@@ -196,6 +235,9 @@ final class GameDirector {
         case .metalRoom:
             updateMetalRoom(dt: dt)
 
+        case .giantHouse:
+            updateGiantHouse()
+
         case .escapeRed:
             surviveTimer -= dt
             let m = Int(surviveTimer) / 60
@@ -205,39 +247,6 @@ final class GameDirector {
                 redChasing = false
                 world.godRed.park()
                 onMessage?("You escaped GOD RED!")
-                enter(.carryLevers)
-            }
-
-        case .carryLevers:
-            // Pick up portable levers.
-            for lever in world.portableLevers where !lever.isHidden && lever.opacity > 0.5 {
-                if dist(lever.simdPosition) < pickupRadius {
-                    lever.isHidden = true
-                    leversCarried += 1
-                    onMessage?("Lever taken! (\(leversCarried)/3)")
-                }
-            }
-
-            // Must pass through the metal door while carrying.
-            if leversCarried > 0 && dist(world.leverGatePos) < 4 {
-                passedLeverGate = true
-            }
-
-            // Place levers at the deposit rack.
-            if passedLeverGate && leversCarried > 0 && dist(world.leverDepositPos) < 4 {
-                leversPlaced += leversCarried
-                leversCarried = 0
-                onMessage?("Levers placed! (\(leversPlaced)/3)")
-            }
-
-            setHUD("Levers carried: \(leversCarried)  placed: \(leversPlaced)/3")
-            if leversPlaced >= 3 {
-                sonChasing = false
-                sonWaiting = false
-                world.sonnelves.park()
-                world.showLeverCarrySetup(false)
-                world.showPortableLevers(false)
-                onMessage?("All levers placed!")
                 enter(.escapeVillage)
             }
 
@@ -296,30 +305,20 @@ final class GameDirector {
 
         case .followBlue:
             setHUD("Follow the BLUE lights!")
-            // Start the break once the player has moved toward the blue path / door.
-            if world.player.position.x > -6 || dist(world.breakDoorPos) < 6 {
+            if world.player.position.x > 2.5 || dist(world.breakDoorPos) < 5 {
                 guard !doorBreakStarted else { break }
                 doorBreakStarted = true
                 roomPhase = .doorBreaking
-                onMessage?("GOD RED is breaking the metal door!")
-                setHUD("GOD RED is breaking the door...")
-                DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
-                    guard let self, self.objective == .metalRoom else { return }
-                    self.world.breakMetalDoor {
-                        self.onMessage?("Door broken! Keep running — 30 seconds!")
-                        self.roomPhase = .runThirty
-                        self.surviveTimer = self.roomRunSeconds
-                    }
-                }
+                playDoorBreakCutsceneThenSmash()
             }
 
         case .doorBreaking:
             setHUD("GOD RED is breaking the door...")
 
-        case .runThirty:
-            surviveTimer -= dt
-            setHUD("Metal room! Run \(Int(ceil(max(0, surviveTimer))))s")
-            if surviveTimer <= 0 {
+        case .runHundred:
+            setHUD("Door broken! Run another 100cm!")
+            // 100cm past the break door (~x 5.0) or reach the post-break mark.
+            if world.player.position.x >= 5.0 {
                 roomPhase = .closeGate
                 onMessage?("Close the metal gate!")
                 showBeam(at: world.exitDoorPos)
@@ -329,10 +328,98 @@ final class GameDirector {
             setHUD("Close the metal gate to escape!")
             if dist(world.exitDoorPos) < 3.8 && !world.gateClosed {
                 onMessage?("You slam the metal gate!")
+                // Step past the gate so the seal closes behind you.
+                var p = world.player.position
+                p.x = max(p.x, 9.3)
+                world.player.position = p
                 world.closeMetalGate { [weak self] in
-                    self?.escapeMetalRoom()
+                    guard let self else { return }
+                    self.roomPhase = .runPastGate
+                    self.onMessage?("Run past the gate!")
+                    self.showBeam(at: self.world.postGateRunPos)
                 }
             }
+
+        case .runPastGate:
+            setHUD("Run past the gate!")
+            if world.player.position.x >= 10.0 || dist(world.postGateRunPos) < 1.5 {
+                escapeMetalRoom()
+            }
+        }
+    }
+
+    private func playDoorBreakCutsceneThenSmash() {
+        onMessage?("GOD RED is breaking the metal door!")
+        setHUD("GOD RED is breaking the door...")
+        let smash = { [weak self] in
+            guard let self, self.objective == .metalRoom else { return }
+            self.world.breakMetalDoor {
+                self.onMessage?("Door broken! Run another 100 centimeters!")
+                self.roomPhase = .runHundred
+            }
+        }
+        if cutsceneDoorPlayed {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.2, execute: smash)
+        } else {
+            cutsceneDoorPlayed = true
+            playingCutscene = true
+            onCutscene?(.redBreaksDoor) { [weak self] in
+                self?.playingCutscene = false
+                smash()
+            }
+        }
+    }
+
+    private func updateGiantHouse() {
+        let pos = world.player.position
+
+        if world.tryPickupKey(at: pos) {
+            onMessage?("You found the KEY!")
+        }
+        if world.tryUnlockDoor(at: pos) {
+            onMessage?("Locked room unlocked!")
+        }
+
+        if !tookLockedLever && !world.lockedRoomLever.isHidden && world.lockedDoorOpen {
+            let leverWorld = world.lockedRoomLever.presentation.worldPosition
+            if dist(SIMD3<Float>(leverWorld.x, 0, leverWorld.z)) < pickupRadius {
+                world.lockedRoomLever.isHidden = true
+                tookLockedLever = true
+                giantLeversTaken += 1
+                onMessage?("Locked-room lever! (\(giantLeversTaken)/3)")
+            }
+        }
+
+        if !tookTunnelLever && !world.tunnelLever.isHidden {
+            let leverWorld = world.tunnelLever.presentation.worldPosition
+            if dist(SIMD3<Float>(leverWorld.x, 0, leverWorld.z)) < pickupRadius {
+                world.tunnelLever.isHidden = true
+                tookTunnelLever = true
+                giantLeversTaken += 1
+                onMessage?("Tunnel lever! (\(giantLeversTaken)/3)")
+            }
+        }
+
+        if !tookWaterLever && !world.waterLever.isHidden {
+            let leverWorld = world.waterLever.presentation.worldPosition
+            if dist(SIMD3<Float>(leverWorld.x, 0, leverWorld.z)) < pickupRadius + 0.5 {
+                world.waterLever.isHidden = true
+                tookWaterLever = true
+                giantLeversTaken += 1
+                onMessage?("Underwater lever! (\(giantLeversTaken)/3)")
+            }
+        }
+
+        var bits: [String] = []
+        bits.append(tookLockedLever ? "Room✓" : (world.hasKey ? "Room (unlocked?)" : "Find KEY"))
+        bits.append(tookTunnelLever ? "Tunnel✓" : "Tunnel")
+        bits.append(tookWaterLever ? "Water✓" : "Dive")
+        setHUD("Levers \(giantLeversTaken)/3 — " + bits.joined(separator: " · "))
+
+        if giantLeversTaken >= 3 {
+            world.showGiantHouse(false)
+            onMessage?("All 3 levers taken from the giant house!")
+            enter(.escapeRed)
         }
     }
 
@@ -358,19 +445,24 @@ final class GameDirector {
         guard !falling else { return }
         falling = true
         world.goalBeam.isHidden = true
-        onMessage?("You fall into the hole!")
-        world.enterMetalRoom()
-        world.resetMetalDoor()
-        doorBreakStarted = false
-        world.player.fallIntoHole(at: world.metalRoomSpawn, faceYaw: -Float.pi / 2) { [weak self] in
+        playingCutscene = true
+        onCutscene?(.redFallsHole) { [weak self] in
             guard let self else { return }
-            self.falling = false
-            self.roomPhase = .followBlue
-            self.onMessage?("Follow the blue lights... GOD RED is coming!")
-            self.world.godRed.spawn(at: SIMD3<Float>(-20, self.world.roomY, 0))
-            self.redChasing = true
-            self.onObjective?("OBJECTIVE 3/8\nFollow the BLUE lights — then survive GOD RED")
-            self.setHUD("Follow the BLUE lights!")
+            self.playingCutscene = false
+            self.onMessage?("You fall into the hole!")
+            self.world.enterMetalRoom()
+            self.world.resetMetalDoor()
+            self.doorBreakStarted = false
+            self.world.player.fallIntoHole(at: self.world.metalRoomSpawn, faceYaw: -Float.pi / 2) {
+                self.falling = false
+                self.roomPhase = .followBlue
+                self.onMessage?("Follow the blue lights... GOD RED is coming!")
+                // Wait behind the closed break door until the smash.
+                self.world.godRed.spawn(at: SIMD3<Float>(3.2, self.world.roomY, 0))
+                self.redChasing = true
+                self.onObjective?("OBJECTIVE 3/8\nFollow the BLUE lights — survive GOD RED")
+                self.setHUD("Follow the BLUE lights!")
+            }
         }
     }
 
@@ -378,9 +470,9 @@ final class GameDirector {
         redChasing = false
         world.godRed.park()
         world.leaveMetalRoom()
-        world.player.place(at: world.surfaceAfterRoom, yaw: 0)
-        onMessage?("Gate closed — you made it out!")
-        enter(.escapeRed)
+        world.player.place(at: world.bigSquareCenter, yaw: 0)
+        onMessage?("You escaped through the gates — a gigantic house ahead!")
+        enter(.giantHouse)
     }
 
     // MARK: Interact
@@ -397,8 +489,14 @@ final class GameDirector {
             hint = "Get to the gate and close it"
         } else if objective == .buildRoads && !broughtToHouse {
             hint = "Find the shiny METAL house"
-        } else if objective == .carryLevers {
-            hint = "Take 3 levers → through metal door → place them (avoid SONNELVES)"
+        } else if objective == .giantHouse {
+            if !world.hasKey {
+                hint = "Find the key, then the locked room"
+            } else if !world.lockedDoorOpen {
+                hint = "Unlock the locked room"
+            } else {
+                hint = "Take levers: locked room, tunnel, underwater"
+            }
         }
         if hint != interactHint {
             interactHint = hint
@@ -426,13 +524,30 @@ final class GameDirector {
          world.nearestLocker(to: world.player.position, within: lockerRadius) != nil)
     }
 
-    // MARK: Enter
+    // MARK: Enter / restore
 
-    private func enter(_ next: Objective) {
+    private func enter(_ next: Objective, playWake: Bool = false) {
         objective = next
         lastHUD = ""
         world.goalBeam.isHidden = true
+        onSaveProgress?(next.rawValue)
 
+        let begin: () -> Void = { [weak self] in
+            self?.configure(for: next)
+        }
+
+        if playWake {
+            playingCutscene = true
+            onCutscene?(.wakeVillage) { [weak self] in
+                self?.playingCutscene = false
+                begin()
+            }
+        } else {
+            begin()
+        }
+    }
+
+    private func configure(for next: Objective) {
         switch next {
         case .collectMetal:
             onObjective?("OBJECTIVE 1/8\nCollect 20 metals")
@@ -450,25 +565,23 @@ final class GameDirector {
             showBeam(at: world.holeCenter)
             setHUD("Find the hole in the village center")
 
+        case .giantHouse:
+            onObjective?("OBJECTIVE 4/8\nGiant house — take 3 levers\n(key room, tunnel, underwater)")
+            giantLeversTaken = 0
+            tookLockedLever = false
+            tookTunnelLever = false
+            tookWaterLever = false
+            world.showGiantHouse(true)
+            world.player.place(at: world.bigSquareCenter, yaw: Float.pi)
+            showBeam(at: SIMD3<Float>(world.giantHouseOrigin.x, 0, world.giantHouseOrigin.z - 20))
+            setHUD("Levers 0/3 — Find KEY · Tunnel · Dive")
+
         case .escapeRed:
-            onObjective?("OBJECTIVE 4/8\nRUN from GOD RED — 2:30")
+            onObjective?("OBJECTIVE 5/8\nRUN from GOD RED — 2:30")
+            world.showGiantHouse(false)
             spawnRedBehindPlayer()
             surviveTimer = redChaseSeconds
             setHUD("GOD RED! Survive 2:30")
-
-        case .carryLevers:
-            onObjective?("OBJECTIVE 5/8\nTake 3 levers, go through the metal door, place them\nSONNELVES waits nearby!")
-            leversCarried = 0
-            leversPlaced = 0
-            passedLeverGate = false
-            world.restorePortableLevers()
-            world.showPortableLevers(true)
-            world.showLeverCarrySetup(true)
-            world.sonnelves.spawn(at: world.sonnelvesWaitPos)
-            sonWaiting = true
-            sonChasing = false
-            showBeam(at: world.leverDepositPos)
-            setHUD("Levers carried: 0  placed: 0/3")
 
         case .escapeVillage:
             onObjective?("OBJECTIVE 6/8\nEscape! Hide in lockers outside houses")
@@ -495,6 +608,30 @@ final class GameDirector {
         }
     }
 
+    private func restore(to saved: Objective) {
+        world.restoreAllMetals()
+        world.showPortableLevers(false)
+        world.showFinalPortableLevers(false)
+        world.showLeverCarrySetup(false)
+        world.showGiantHouse(false)
+        world.showElevator(false)
+        world.clearRoads()
+        world.leaveMetalRoom()
+        world.godRed.park()
+        world.sonnelves.park()
+        world.respawnPlayer()
+
+        // Give enough progress so later objectives are reachable.
+        if saved.rawValue >= Objective.buildRoads.rawValue {
+            metalCarried = firstMetalGoal
+            metalDeposited = totalMetalGoal
+            broughtToHouse = true
+            world.buildRoadsToEveryHouse()
+        }
+        enter(saved)
+        onMessage?("Continue — back to your objective.")
+    }
+
     private func showBeam(at pos: SIMD3<Float>) {
         world.goalBeam.simdPosition = pos
         world.goalBeam.isHidden = false
@@ -507,23 +644,15 @@ final class GameDirector {
         redChasing = true
     }
 
-    // MARK: Death / win
+    // MARK: Death / win — revive keeps the same objective
 
     private func die(killedBy: Killer) {
         guard !isDead else { return }
         isDead = true
         redChasing = false
         sonChasing = false
-        sonWaiting = false
         falling = false
         doorBreakStarted = false
-        metalCarried = 0
-        metalDeposited = 0
-        broughtToHouse = false
-        leversCarried = 0
-        leversPlaced = 0
-        finalLeversCarried = 0
-        finalLeversPlaced = 0
         world.player.setHidden(false)
         world.godRed.setRunning(false)
         world.sonnelves.setRunning(false)
@@ -533,9 +662,69 @@ final class GameDirector {
     func revive() {
         guard isDead else { return }
         isDead = false
-        fullReset()
-        onMessage?("You revived... but lost everything.")
-        enter(.collectMetal)
+        resetForCurrentObjective()
+        onMessage?("You revived — same objective.")
+        configure(for: objective)
+    }
+
+    private func resetForCurrentObjective() {
+        world.player.setHidden(false)
+        world.godRed.park()
+        world.sonnelves.park()
+        redChasing = false
+        sonChasing = false
+        falling = false
+        doorBreakStarted = false
+        world.leaveMetalRoom()
+        world.resetMetalDoor()
+        world.goalBeam.isHidden = true
+
+        switch objective {
+        case .collectMetal:
+            metalCarried = 0
+            world.restoreAllMetals()
+            world.respawnPlayer()
+
+        case .buildRoads:
+            metalCarried = 0
+            world.respawnPlayer()
+
+        case .metalRoom:
+            roomPhase = .goToHole
+            world.respawnPlayer()
+            showBeam(at: world.holeCenter)
+
+        case .giantHouse:
+            giantLeversTaken = 0
+            tookLockedLever = false
+            tookTunnelLever = false
+            tookWaterLever = false
+            world.showGiantHouse(true)
+            world.player.place(at: world.bigSquareCenter, yaw: Float.pi)
+
+        case .escapeRed:
+            surviveTimer = redChaseSeconds
+            world.player.place(at: world.surfaceAfterRoom, yaw: 0)
+            spawnRedBehindPlayer()
+
+        case .escapeVillage:
+            world.player.place(at: world.spawn, yaw: world.spawnYaw)
+            spawnRedBehindPlayer()
+            showBeam(at: world.exitGoal)
+
+        case .findFinalLevers:
+            finalLeversCarried = 0
+            world.showFinalPortableLevers(true)
+            world.player.place(at: world.spawn, yaw: world.spawnYaw)
+
+        case .elevatorEnd:
+            world.showElevator(true)
+            world.player.place(at: world.depositHouse, yaw: 0)
+            showBeam(at: world.finalDepositPos)
+
+        case .won:
+            break
+        }
     }
 
     private func win() {
@@ -546,35 +735,38 @@ final class GameDirector {
         world.sonnelves.park()
         world.goalBeam.isHidden = true
         world.player.setHidden(false)
+        onSaveProgress?(-1)
         onWin?()
     }
 
     func restart() {
         isDead = false
         fullReset()
-        enter(.collectMetal)
+        enter(.collectMetal, playWake: true)
     }
 
     private func fullReset() {
         metalCarried = 0
         metalDeposited = 0
         broughtToHouse = false
-        leversCarried = 0
-        leversPlaced = 0
+        giantLeversTaken = 0
+        tookLockedLever = false
+        tookTunnelLever = false
+        tookWaterLever = false
         finalLeversCarried = 0
         finalLeversPlaced = 0
-        passedLeverGate = false
         falling = false
         doorBreakStarted = false
+        cutsceneDoorPlayed = false
         roomPhase = .goToHole
         redChasing = false
         sonChasing = false
-        sonWaiting = false
         world.restoreAllMetals()
         world.restorePortableLevers()
         world.showPortableLevers(false)
         world.showFinalPortableLevers(false)
         world.showLeverCarrySetup(false)
+        world.showGiantHouse(false)
         world.resetMetalDoor()
         world.showChoiceDoors(false)
         world.showElevator(false)

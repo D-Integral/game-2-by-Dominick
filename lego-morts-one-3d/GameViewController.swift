@@ -1,5 +1,5 @@
 //
-//  GameViewController.swift
+ //  GameViewController.swift
 //  lego-morts-one-3d
 //
 //  LEGO MORTS ONE - first-person LEGO horror survival game.
@@ -13,25 +13,27 @@ import simd
 
 final class GameViewController: UIViewController {
 
+    private static let saveKey = "legoMortsOne.objective"
+
     private var sceneView: SCNView!
     private var world: GameWorld!
     private var director: GameDirector!
+    private let cutscenes = CutscenePlayer()
+    private var menuView: MainMenuView?
 
     private var displayLink: CADisplayLink?
     private var lastTime: CFTimeInterval = 0
     private var moveInput = SIMD2<Float>(0, 0)
+    private var gameStarted = false
 
-    // Touch tracking — both fingers can be active at once (move + look).
     private var moveTouch: UITouch?
     private var lookTouch: UITouch?
     private var moveOrigin = CGPoint.zero
     private let joyRadius: CGFloat = 55
 
-    // Short-tap detection for one-tap locker enter/leave.
     private var tapTouch: UITouch?
     private var tapStart = CGPoint.zero
 
-    // UI
     private let objectiveLabel = UILabel()
     private let hudLabel = UILabel()
     private let messageLabel = UILabel()
@@ -55,36 +57,8 @@ final class GameViewController: UIViewController {
 
         setupScene()
         setupUI()
-
-        // Always touch UIKit on the main thread (SCNAction completions may call these off-main).
-        director.onObjective = { [weak self] text in
-            Self.onMain { self?.objectiveLabel.text = text }
-        }
-        director.onHUD = { [weak self] text in
-            Self.onMain { self?.hudLabel.text = text }
-        }
-        director.onMessage = { [weak self] text in
-            Self.onMain { self?.showMessage(text) }
-        }
-        director.onDeath = { [weak self] killer in
-            Self.onMain { self?.showJumpscare(killedBy: killer) }
-        }
-        director.onWin = { [weak self] in
-            Self.onMain { self?.showWin() }
-        }
-        director.onInteractHint = { [weak self] text in
-            Self.onMain {
-                self?.interactLabel.text = text
-                self?.interactLabel.isHidden = (text == nil)
-            }
-        }
-
-        director.start()
-        showMessage("Left = run. Right = look. Collect metal.")
-
-        let link = CADisplayLink(target: self, selector: #selector(step(_:)))
-        link.add(to: .main, forMode: .common)
-        displayLink = link
+        setupDirectorCallbacks()
+        showMainMenu()
     }
 
     // MARK: Setup
@@ -104,6 +78,43 @@ final class GameViewController: UIViewController {
         scn.pointOfView = world.player.cameraNode
 
         director = GameDirector(world: world)
+    }
+
+    private func setupDirectorCallbacks() {
+        director.onObjective = { [weak self] text in
+            Self.onMain { self?.objectiveLabel.text = text }
+        }
+        director.onHUD = { [weak self] text in
+            Self.onMain { self?.hudLabel.text = text }
+        }
+        director.onMessage = { [weak self] text in
+            Self.onMain { self?.showMessage(text) }
+        }
+        director.onDeath = { [weak self] killer in
+            Self.onMain { self?.showJumpscare(killedBy: killer) }
+        }
+        director.onWin = { [weak self] in
+            Self.onMain {
+                UserDefaults.standard.removeObject(forKey: Self.saveKey)
+                self?.showWin()
+            }
+        }
+        director.onInteractHint = { [weak self] text in
+            Self.onMain {
+                self?.interactLabel.text = text
+                self?.interactLabel.isHidden = (text == nil)
+            }
+        }
+        director.onCutscene = { [weak self] kind, done in
+            Self.onMain { self?.playStoryCutscene(kind, completion: done) }
+        }
+        director.onSaveProgress = { raw in
+            if raw < 0 {
+                UserDefaults.standard.removeObject(forKey: Self.saveKey)
+            } else {
+                UserDefaults.standard.set(raw, forKey: Self.saveKey)
+            }
+        }
     }
 
     private func setupUI() {
@@ -166,7 +177,6 @@ final class GameViewController: UIViewController {
         joyKnob.isHidden = true
         view.addSubview(joyKnob)
 
-        // Fullscreen jumpscare flash
         jumpscareView.backgroundColor = .black
         jumpscareView.isHidden = true
         jumpscareView.isUserInteractionEnabled = false
@@ -185,7 +195,7 @@ final class GameViewController: UIViewController {
         deathView.isUserInteractionEnabled = false
         deathView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(deathView)
-        deathLabel.text = "YOU DIED\n\nTap to revive\n(you lose all your metal & progress)"
+        deathLabel.text = "YOU DIED\n\nTap to revive\n(same objective)"
         deathLabel.font = .systemFont(ofSize: 26, weight: .heavy)
         deathLabel.textColor = .white
         deathLabel.textAlignment = .center
@@ -203,6 +213,8 @@ final class GameViewController: UIViewController {
         winLabel.textColor = UIColor(red: 0.6, green: 1.0, blue: 0.7, alpha: 1)
         winView.addSubview(winLabel)
         pinCenter(winLabel, in: winView)
+
+        setGameplayHUDHidden(true)
 
         NSLayoutConstraint.activate([
             objectiveLabel.topAnchor.constraint(equalTo: view.safeAreaLayoutGuide.topAnchor, constant: 10),
@@ -241,6 +253,105 @@ final class GameViewController: UIViewController {
         ])
     }
 
+    private func setGameplayHUDHidden(_ hidden: Bool) {
+        objectiveLabel.isHidden = hidden
+        hudLabel.isHidden = hidden
+        hintLabel.isHidden = hidden
+        crosshair.isHidden = hidden
+        interactLabel.isHidden = hidden || interactLabel.text == nil
+    }
+
+    // MARK: Menu / intro / cutscenes
+
+    private func showMainMenu() {
+        menuView?.removeFromSuperview()
+        let menu = MainMenuView(frame: view.bounds)
+        menu.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        menu.refreshContinue(enabled: UserDefaults.standard.object(forKey: Self.saveKey) != nil)
+        menu.onNewGame = { [weak self] in self?.beginNewGame() }
+        menu.onContinue = { [weak self] in self?.beginContinue() }
+        menu.onSettings = { }
+        view.addSubview(menu)
+        menuView = menu
+        setGameplayHUDHidden(true)
+    }
+
+    private func beginNewGame() {
+        menuView?.removeFromSuperview()
+        menuView = nil
+        playIntro { [weak self] in
+            self?.startGameplay(at: nil)
+        }
+    }
+
+    private func beginContinue() {
+        menuView?.removeFromSuperview()
+        menuView = nil
+        let raw = UserDefaults.standard.object(forKey: Self.saveKey) as? Int
+        startGameplay(at: raw)
+    }
+
+    private func startGameplay(at objectiveRaw: Int?) {
+        gameStarted = true
+        setGameplayHUDHidden(false)
+        director.start(at: objectiveRaw)
+        if objectiveRaw == nil {
+            showMessage("Left = run. Right = look. Collect metal.")
+        }
+        if displayLink == nil {
+            let link = CADisplayLink(target: self, selector: #selector(step(_:)))
+            link.add(to: .main, forMode: .common)
+            displayLink = link
+        }
+        lastTime = 0
+    }
+
+    private func playIntro(completion: @escaping () -> Void) {
+        let red = UIColor(red: 0.25, green: 0, blue: 0, alpha: 1)
+        cutscenes.play(on: view, beats: [
+            .init(title: "THE CITY",
+                  body: "Night falls on the LEGO city.\nHumans walk the streets...\nGOD RED walks with them.",
+                  duration: 4.5,
+                  background: UIColor(red: 0.05, green: 0.02, blue: 0.08, alpha: 1)),
+            .init(title: "GOD RED FEEDS",
+                  body: "One human is caught.\nGOD RED eats.\nScreams fill the streets.",
+                  duration: 4.0,
+                  background: red),
+            .init(title: "SOME ESCAPE",
+                  body: "A few humans flee into the dark.\nThey reach a quiet village...\nBut GOD RED is still hungry.",
+                  duration: 4.5,
+                  background: UIColor(red: 0.02, green: 0.05, blue: 0.12, alpha: 1))
+        ], completion: completion)
+    }
+
+    private func playStoryCutscene(_ kind: GameDirector.CutsceneKind, completion: @escaping () -> Void) {
+        let beats: [CutscenePlayer.Beat]
+        switch kind {
+        case .wakeVillage:
+            beats = [
+                .init(title: "CUTSCENE 1",
+                      body: "You wake up in the village.\nMetal glints in the dirt.\nSomething red is coming.",
+                      duration: 4.0,
+                      background: UIColor(red: 0.08, green: 0.1, blue: 0.05, alpha: 1))
+            ]
+        case .redFallsHole:
+            beats = [
+                .init(title: "CUTSCENE 2",
+                      body: "GOD RED falls down the hole...\nYou tumble after him\ninto the metal room.",
+                      duration: 4.0,
+                      background: UIColor(red: 0.05, green: 0.05, blue: 0.12, alpha: 1))
+            ]
+        case .redBreaksDoor:
+            beats = [
+                .init(title: "CUTSCENE 3",
+                      body: "GOD RED smashes the metal door!\nThe hallway shakes.\nRun — another 100 centimeters!",
+                      duration: 4.0,
+                      background: UIColor(red: 0.3, green: 0.02, blue: 0.02, alpha: 1))
+            ]
+        }
+        cutscenes.play(on: view, beats: beats, completion: completion)
+    }
+
     private func styleShadow(_ label: UILabel) {
         label.layer.shadowColor = UIColor.black.cgColor
         label.layer.shadowRadius = 3
@@ -276,6 +387,7 @@ final class GameViewController: UIViewController {
     // MARK: Game loop
 
     @objc private func step(_ link: CADisplayLink) {
+        guard gameStarted else { return }
         if lastTime == 0 { lastTime = link.timestamp; return }
         let dt = Float(min(0.05, link.timestamp - lastTime))
         lastTime = link.timestamp
@@ -314,6 +426,10 @@ final class GameViewController: UIViewController {
             jumpscareView.backgroundColor = UIColor(white: 0.92, alpha: 1)
             jumpscareLabel.text = "SONNELVES\nTAKES YOUR HEART"
             jumpscareLabel.textColor = .red
+        case .hole:
+            jumpscareView.backgroundColor = UIColor(red: 0.05, green: 0.05, blue: 0.12, alpha: 1)
+            jumpscareLabel.text = "YOU FELL\nINTO THE HOLE"
+            jumpscareLabel.textColor = UIColor(white: 0.85, alpha: 1)
         }
         jumpscareView.alpha = 0
         jumpscareView.isHidden = false
@@ -349,6 +465,8 @@ final class GameViewController: UIViewController {
     // MARK: Touch handling
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
+        if menuView != nil { return }
+
         if !deathView.isHidden {
             deathView.isHidden = true
             director.revive()
@@ -360,16 +478,16 @@ final class GameViewController: UIViewController {
             return
         }
 
+        guard gameStarted else { return }
+
         for touch in touches {
             let loc = touch.location(in: view)
 
-            // Remember a possible short tap (locker interact). Movement still works.
             if tapTouch == nil {
                 tapTouch = touch
                 tapStart = loc
             }
 
-            // Left half starts / keeps the move stick.
             if loc.x < view.bounds.midX {
                 if moveTouch == nil {
                     moveTouch = touch
@@ -391,6 +509,7 @@ final class GameViewController: UIViewController {
     }
 
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
+        guard gameStarted, menuView == nil else { return }
         for touch in touches {
             let loc = touch.location(in: view)
             if touch == moveTouch {
@@ -424,8 +543,7 @@ final class GameViewController: UIViewController {
             if touch == tapTouch {
                 let loc = touch.location(in: view)
                 let dist = hypot(loc.x - tapStart.x, loc.y - tapStart.y)
-                // One short tap (not a drag) enters / leaves a locker.
-                if dist < 18, director.canTapInteract() {
+                if dist < 18, gameStarted, director.canTapInteract() {
                     director.tryInteract()
                 }
                 tapTouch = nil
