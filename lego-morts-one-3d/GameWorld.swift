@@ -53,13 +53,14 @@ final class GameWorld {
     let finalPortableLeverSpots = [SIMD3<Float>(-30, 0, 55),
                                    SIMD3<Float>(25, 0, 60)]
 
-    // Metal room: run 16 km along +X, then another way 8 km along +Z, then the gate.
+    // Metal room: long chase along +X, then the other way along +Z, then the gate.
+    // Lengths are playable (not literal 16/8 km) so you can outrun Red.
     let roomY: Float = -14
-    let run16km: Float = 16_000
-    let run8km: Float = 8_000
+    let run16km: Float = 120
+    let run8km: Float = 60
     let hallwayWidth: Float = 5
     var metalRoomSpawn: SIMD3<Float> { SIMD3<Float>(2, roomY, 0) }
-    var breakDoorPos: SIMD3<Float> { SIMD3<Float>(40, roomY, 0) }
+    var breakDoorPos: SIMD3<Float> { SIMD3<Float>(18, roomY, 0) }
     var turnJunction: SIMD3<Float> { SIMD3<Float>(run16km, roomY, 0) }
     var exitDoorPos: SIMD3<Float> { SIMD3<Float>(run16km, roomY, run8km) } // metal gate
     var postGateRunPos: SIMD3<Float> { SIMD3<Float>(run16km, roomY, run8km + 8) }
@@ -366,11 +367,11 @@ final class GameWorld {
         // Second leg: 8 km along +Z from the junction
         addCorridor(centerX: run16km, centerZ: run8km * 0.5, lengthX: w, lengthZ: run8km + 4)
 
-        // Sparse blue lights (every ~400 m) so the chase stays readable.
-        for x in stride(from: Float(20), through: run16km, by: 400) {
+        // Blue lights along both legs.
+        for x in stride(from: Float(8), through: run16km, by: 12) {
             addBlueLight(at: SCNVector3(x, 4.4, 0))
         }
-        for z in stride(from: Float(20), through: run8km, by: 400) {
+        for z in stride(from: Float(8), through: run8km, by: 12) {
             addBlueLight(at: SCNVector3(run16km, 4.4, z))
         }
 
@@ -378,7 +379,7 @@ final class GameWorld {
         let breakable = Props.metalDoor()
         metalDoorRoot = breakable.root
         metalDoorPanel = breakable.doorPanel
-        metalDoorRoot.position = SCNVector3(40, 0, 0)
+        metalDoorRoot.position = SCNVector3(18, 0, 0)
         metalDoorRoot.eulerAngles = SCNVector3(0, -Float.pi / 2, 0)
         metalDoorPanel.position = SCNVector3(0, 2.4, 0)
         metalRoomRoot.addChildNode(metalDoorRoot)
@@ -419,9 +420,9 @@ final class GameWorld {
         inMetalRoom = true
         metalRoomRoot.isHidden = false
         holeNode.isHidden = true
-        scene.fogStartDistance = 80
-        scene.fogEndDistance = 600
-        player.cameraNode.camera?.zFar = 1200
+        scene.fogStartDistance = 25
+        scene.fogEndDistance = 90
+        player.cameraNode.camera?.zFar = 250
     }
 
     func leaveMetalRoom() {
@@ -744,7 +745,7 @@ final class GameWorld {
             let inSecond = abs(x - run16km) <= half && z >= -half && z <= run8km + 4
             if !(inFirst || inSecond) { return true }
             if metalDoorClosed && !metalDoorBroken {
-                if abs(x - 40) < 0.9 && abs(z) < half + 0.2 { return true }
+                if abs(x - 18) < 0.9 && abs(z) < half + 0.2 { return true }
             }
             if gateClosed {
                 // Seal behind the gate on the approach side.

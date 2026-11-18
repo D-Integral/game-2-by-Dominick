@@ -13,8 +13,6 @@ import simd
 
 final class GameViewController: UIViewController {
 
-    private static let saveKey = "legoMortsOne.objective"
-
     private var sceneView: SCNView!
     private var world: GameWorld!
     private var director: GameDirector!
@@ -95,7 +93,7 @@ final class GameViewController: UIViewController {
         }
         director.onWin = { [weak self] in
             Self.onMain {
-                UserDefaults.standard.removeObject(forKey: Self.saveKey)
+                SaveGameStore.markActiveFinished()
                 self?.showWin()
             }
         }
@@ -110,9 +108,9 @@ final class GameViewController: UIViewController {
         }
         director.onSaveProgress = { raw in
             if raw < 0 {
-                UserDefaults.standard.removeObject(forKey: Self.saveKey)
+                SaveGameStore.markActiveFinished()
             } else {
-                UserDefaults.standard.set(raw, forKey: Self.saveKey)
+                SaveGameStore.updateActive(objectiveRaw: raw)
             }
         }
     }
@@ -142,7 +140,7 @@ final class GameViewController: UIViewController {
         messageLabel.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(messageLabel)
 
-        hintLabel.text = "Left finger: run   •   Right finger: look (while running)"
+        hintLabel.text = "Left: run   •   Right: look   •   GOD RED chase: look back, stick flees"
         hintLabel.font = .systemFont(ofSize: 12, weight: .medium)
         hintLabel.textColor = UIColor(white: 0.7, alpha: 1)
         hintLabel.textAlignment = .center
@@ -267,36 +265,40 @@ final class GameViewController: UIViewController {
         menuView?.removeFromSuperview()
         let menu = MainMenuView(frame: view.bounds)
         menu.autoresizingMask = [.flexibleWidth, .flexibleHeight]
-        menu.refreshContinue(enabled: UserDefaults.standard.object(forKey: Self.saveKey) != nil)
+        menu.refreshContinue()
         menu.onNewGame = { [weak self] in self?.beginNewGame() }
-        menu.onContinue = { [weak self] in self?.beginContinue() }
+        menu.onContinueSlot = { [weak self] slot in self?.beginContinue(slot: slot) }
         menu.onSettings = { }
         view.addSubview(menu)
         menuView = menu
         setGameplayHUDHidden(true)
+        gameStarted = false
     }
 
     private func beginNewGame() {
         menuView?.removeFromSuperview()
         menuView = nil
+        _ = SaveGameStore.createNewGame()
         playIntro { [weak self] in
             self?.startGameplay(at: nil)
         }
     }
 
-    private func beginContinue() {
+    private func beginContinue(slot: SaveGameStore.Slot) {
         menuView?.removeFromSuperview()
         menuView = nil
-        let raw = UserDefaults.standard.object(forKey: Self.saveKey) as? Int
-        startGameplay(at: raw)
+        SaveGameStore.setActive(id: slot.id)
+        startGameplay(at: slot.objectiveRaw)
     }
 
     private func startGameplay(at objectiveRaw: Int?) {
         gameStarted = true
         setGameplayHUDHidden(false)
         director.start(at: objectiveRaw)
-        if objectiveRaw == nil {
-            showMessage("Left = run. Right = look. Collect metal.")
+        if objectiveRaw != nil {
+            showMessage("Continue — same objective.")
+        } else {
+            showMessage("Left = run. Right = look. GOD RED chase: look back!")
         }
         if displayLink == nil {
             let link = CADisplayLink(target: self, selector: #selector(step(_:)))
@@ -352,7 +354,7 @@ final class GameViewController: UIViewController {
         case .redBreaksDoor:
             beats = [
                 .init(title: "CUTSCENE 3",
-                      body: "GOD RED smashes the metal door!\nRun 16 kilometers...\nthen another way — 8 kilometers!",
+                      body: "GOD RED smashes the metal door!\nHe is behind you.\nRUN down the hallway — then the other way!",
                       duration: 4.2,
                       background: UIColor(red: 0.3, green: 0.02, blue: 0.02, alpha: 1))
             ]
@@ -494,7 +496,9 @@ final class GameViewController: UIViewController {
         }
         if !winView.isHidden {
             winView.isHidden = true
+            _ = SaveGameStore.createNewGame()
             director.restart()
+            showMessage("New game — look back when GOD RED chases!")
             return
         }
 

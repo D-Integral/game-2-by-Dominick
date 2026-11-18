@@ -74,13 +74,16 @@ final class GameDirector {
     private var cutsceneDoorPlayed = false
     private var sonCeilingPlayed = false
 
-    private var redChasing = false
+    private(set) var redChasing = false
     private var sonChasing = false
+    /// Seconds after Red starts chasing before he can catch you (stops instant death).
+    private var catchGrace: Float = 0
 
     private let playerSpeed: Float = 21
-    private let redSpeed: Float = 20
-    private let sonSpeed: Float = 20
-    private let catchRadius: Float = 2.5
+    private let redSpeed: Float = 14          // slower than player so you can outrun him
+    private let redSpeedMetal: Float = 12     // even slower in the metal hallway
+    private let sonSpeed: Float = 16
+    private let catchRadius: Float = 2.0
     private let pickupRadius: Float = 2.2
     private let goalRadius: Float = 4.5
     private let holeRadius: Float = 2.8
@@ -113,6 +116,8 @@ final class GameDirector {
     }
 
     func start(at objectiveRaw: Int? = nil) {
+        isDead = false
+        fullReset()
         if let raw = objectiveRaw, let saved = Objective(rawValue: raw), saved != .won {
             let mapped = (saved == .escapeRed) ? .escapeVillage : saved
             restore(to: mapped)
@@ -124,6 +129,10 @@ final class GameDirector {
     func update(dt: Float, move: SIMD2<Float>) {
         guard !isDead, objective != .won, !playingCutscene else { return }
         if falling { return }
+
+        if catchGrace > 0 {
+            catchGrace = max(0, catchGrace - dt)
+        }
 
         updateHazardVisibility()
 
@@ -138,7 +147,25 @@ final class GameDirector {
     }
 
     private func movePlayer(dt: Float, move: SIMD2<Float>) {
-        var delta = world.player.forward * move.y + world.player.right * move.x
+        // Normal camera-relative move. If you're looking AT Red while he chases,
+        // flip stick-forward so "forward" still means run AWAY (look back safely).
+        var forward = world.player.forward
+        var right = world.player.right
+        if redChasing && !world.godRed.node.isHidden && catchGrace <= 0 {
+            var toRed = world.godRed.node.simdPosition - world.player.position
+            toRed.y = 0
+            let toRedLen = simd_length(toRed)
+            if toRedLen > 0.1 {
+                toRed /= toRedLen
+                // Looking toward Red → invert so stick-up flees instead of charging him.
+                if simd_dot(forward, toRed) > 0.25 {
+                    forward = -forward
+                    right = -right
+                }
+            }
+        }
+
+        var delta = forward * move.y + right * move.x
         delta.y = 0
         let len = simd_length(delta)
         guard len > 0.001 else { return }
@@ -195,10 +222,11 @@ final class GameDirector {
     private func updateMonsters(dt: Float) {
         let y = world.inMetalRoom ? world.roomY : Float(0)
         if redChasing {
+            let speed = world.inMetalRoom ? redSpeedMetal : redSpeed
             if objective == .metalRoom && roomPhase == .doorBreaking {
-                world.godRed.chase(toward: world.breakDoorPos, speed: redSpeed, dt: dt, keepY: y)
+                world.godRed.chase(toward: world.breakDoorPos, speed: speed, dt: dt, keepY: y)
             } else {
-                world.godRed.chase(toward: world.player.position, speed: redSpeed, dt: dt, keepY: y)
+                world.godRed.chase(toward: world.player.position, speed: speed, dt: dt, keepY: y)
             }
             world.godRed.updateWalk(dt: dt)
         } else {
@@ -215,15 +243,36 @@ final class GameDirector {
 
     private func checkCatch() {
         if world.player.isHiding { return }
-        let redBlocked = objective == .metalRoom &&
-            (roomPhase == .doorBreaking || world.gateClosed)
-        if redChasing && !redBlocked &&
+        if catchGrace > 0 { return }
+
+        // In the metal room, Red only kills during the actual run — never at the door smash.
+        let metalSafe = objective == .metalRoom &&
+            (roomPhase == .goToHole || roomPhase == .rockCutscene ||
+             roomPhase == .followBlue || roomPhase == .doorBreaking ||
+             world.gateClosed)
+        if redChasing && !metalSafe &&
             world.godRed.groundDistance(to: world.player.position) < catchRadius {
             die(killedBy: .godRed)
         } else if sonChasing &&
                     world.sonnelves.groundDistance(to: world.player.position) < catchRadius {
             die(killedBy: .sonnelves)
         }
+    }
+
+    /// Start Red behind you with a grace window so you can run away.
+    private func beginRedChase(behindDistance: Float = 22) {
+        let behind = world.player.position - world.player.forward * behindDistance
+        let y = world.inMetalRoom ? world.roomY : Float(0)
+        // Prefer spawning toward the hallway entrance when in the metal room.
+        if world.inMetalRoom {
+            let spawnX = max(1, world.player.position.x - behindDistance)
+            world.godRed.spawn(at: SIMD3<Float>(spawnX, y, 0))
+        } else {
+            world.godRed.spawn(at: SIMD3<Float>(behind.x, y, behind.z))
+        }
+        redChasing = true
+        catchGrace = 5.0
+        onMessage?("GOD RED is behind you — RUN!")
     }
 
     // MARK: Objectives
@@ -324,30 +373,35 @@ final class GameDirector {
             break
 
         case .followBlue:
-            setHUD("Follow the BLUE lights!")
-            if world.player.position.x > 25 || dist(world.breakDoorPos) < 12 {
+            setHUD("Follow the BLUE lights to the metal door!")
+            if world.player.position.x > 12 || dist(world.breakDoorPos) < 8 {
                 guard !doorBreakStarted else { break }
                 doorBreakStarted = true
                 roomPhase = .doorBreaking
+                // Red appears at the door to smash it — he cannot catch you yet.
+                world.godRed.spawn(at: world.breakDoorPos)
+                redChasing = true
+                catchGrace = 99
                 playDoorBreakCutsceneThenSmash()
             }
 
         case .doorBreaking:
-            setHUD("GOD RED is breaking the door...")
+            setHUD("GOD RED is breaking the door... get ready to RUN!")
 
         case .run16km:
             let left = max(0, world.run16km - world.player.position.x)
-            setHUD(String(format: "RUN 16 km!  %.0f m left", left))
-            if world.player.position.x >= world.run16km - 5 {
+            let grace = catchGrace > 0 ? "  (safe \(Int(ceil(catchGrace)))s)" : ""
+            setHUD(String(format: "RUN! Keep going — %.0f m left%@", left, grace))
+            if world.player.position.x >= world.run16km - 3 {
                 roomPhase = .run8km
-                onMessage?("Turn! Another way — 8 kilometers!")
+                onMessage?("Turn right — another hallway!")
                 showBeam(at: world.exitDoorPos)
             }
 
         case .run8km:
             let left = max(0, world.run8km - world.player.position.z)
-            setHUD(String(format: "RUN 8 km the other way!  %.0f m left", left))
-            if world.player.position.z >= world.run8km - 4 {
+            setHUD(String(format: "RUN the other way!  %.0f m left", left))
+            if world.player.position.z >= world.run8km - 3 {
                 roomPhase = .closeGate
                 onMessage?("Close the metal gate!")
                 showBeam(at: world.exitDoorPos)
@@ -372,8 +426,17 @@ final class GameDirector {
         let smash = { [weak self] in
             guard let self, self.objective == .metalRoom else { return }
             self.world.breakMetalDoor {
-                self.onMessage?("Door broken! RUN 16 KILOMETERS!")
+                // Push the player past the door, put Red well behind, then chase.
+                var p = self.world.player.position
+                p.x = max(p.x, 22)
+                self.world.player.position = p
+                self.world.player.place(at: p, yaw: -Float.pi / 2) // face down the hall (+X)
                 self.roomPhase = .run16km
+                self.world.godRed.spawn(at: SIMD3<Float>(max(2, p.x - 28), self.world.roomY, 0))
+                self.redChasing = true
+                self.catchGrace = 5.0
+                self.onMessage?("Door broken! RUN — GOD RED is behind you!")
+                self.showBeam(at: self.world.turnJunction)
             }
         }
         if cutsceneDoorPlayed {
@@ -483,10 +546,11 @@ final class GameDirector {
             self.world.player.fallIntoHole(at: self.world.metalRoomSpawn, faceYaw: -Float.pi / 2) {
                 self.falling = false
                 self.roomPhase = .followBlue
-                self.onMessage?("Follow the blue lights... GOD RED is coming!")
-                self.world.godRed.spawn(at: SIMD3<Float>(35, self.world.roomY, 0))
-                self.redChasing = true
-                self.onObjective?("OBJECTIVE 3\nFollow BLUE lights — then RUN 16 km + 8 km")
+                self.redChasing = false
+                self.world.godRed.park()
+                self.catchGrace = 0
+                self.onMessage?("Follow the blue lights to the metal door...")
+                self.onObjective?("OBJECTIVE 3\nFollow BLUE lights — then RUN from GOD RED")
                 self.setHUD("Follow the BLUE lights!")
             }
         }
@@ -505,7 +569,11 @@ final class GameDirector {
 
     private func updateInteractHint() {
         var hint: String?
-        if objective == .escapeVillage || objective == .giantHouse {
+        if redChasing && catchGrace <= 0 && !world.player.isHiding {
+            hint = "Run away! Look back if you want — keep holding forward"
+        } else if catchGrace > 0 && redChasing {
+            hint = "GO! You have a head start — run down the hallway!"
+        } else if objective == .escapeVillage || objective == .giantHouse {
             if world.player.isHiding {
                 hint = "Tap once to leave locker"
             } else if world.nearestLocker(to: world.player.position, within: lockerRadius) != nil {
@@ -677,10 +745,7 @@ final class GameDirector {
     }
 
     private func spawnRedBehindPlayer() {
-        let behind = world.player.position - world.player.forward * 16
-        let y = world.inMetalRoom ? world.roomY : Float(0)
-        world.godRed.spawn(at: SIMD3<Float>(behind.x, y, behind.z))
-        redChasing = true
+        beginRedChase(behindDistance: 20)
     }
 
     // MARK: Death / win
@@ -692,6 +757,7 @@ final class GameDirector {
         sonChasing = false
         falling = false
         doorBreakStarted = false
+        catchGrace = 0
         world.player.setHidden(false)
         world.godRed.setRunning(false)
         world.sonnelves.setRunning(false)
@@ -778,9 +844,7 @@ final class GameDirector {
     }
 
     func restart() {
-        isDead = false
-        fullReset()
-        enter(.collectMetal, playWake: true)
+        start(at: nil)
     }
 
     private func fullReset() {
@@ -798,6 +862,7 @@ final class GameDirector {
         doorBreakStarted = false
         cutsceneDoorPlayed = false
         sonCeilingPlayed = false
+        catchGrace = 0
         roomPhase = .goToHole
         redChasing = false
         sonChasing = false
