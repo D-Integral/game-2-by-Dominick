@@ -79,10 +79,11 @@ final class GameDirector {
     private var catchGrace: Float = 0
 
     private let playerSpeed: Float = 21
-    private let redSpeed: Float = 20
-    private let redSpeedMetal: Float = 19     // long chase: still slower than you (21)
-    private let sonSpeed: Float = 19
-    private let catchRadius: Float = 2.0
+    private let redSpeed: Float = 18          // village chase — still beatable
+    private let redSpeedMetal: Float = 9      // metal hall: much slower so you can survive
+    private let sonSpeed: Float = 16
+    private let catchRadius: Float = 1.8
+    private let catchRadiusMetal: Float = 1.5
     private let pickupRadius: Float = 2.2
     private let goalRadius: Float = 4.5
     private let holeRadius: Float = 2.8
@@ -251,8 +252,9 @@ final class GameDirector {
         let metalSafe = objective == .metalRoom &&
             (roomPhase == .goToHole || roomPhase == .rockCutscene ||
              roomPhase == .doorBreaking || world.gateClosed)
+        let radius = world.inMetalRoom ? catchRadiusMetal : catchRadius
         if redChasing && !metalSafe &&
-            world.godRed.groundDistance(to: world.player.position) < catchRadius {
+            world.godRed.groundDistance(to: world.player.position) < radius {
             die(killedBy: .godRed)
         } else if sonChasing &&
                     world.sonnelves.groundDistance(to: world.player.position) < catchRadius {
@@ -261,18 +263,18 @@ final class GameDirector {
     }
 
     /// Start Red behind you with a grace window so you can run away.
-    private func beginRedChase(behindDistance: Float = 22) {
+    private func beginRedChase(behindDistance: Float = 28) {
         let behind = world.player.position - world.player.forward * behindDistance
         let y = world.inMetalRoom ? world.roomY : Float(0)
-        // Prefer spawning toward the hallway entrance when in the metal room.
         if world.inMetalRoom {
             let spawnX = max(1, world.player.position.x - behindDistance)
             world.godRed.spawn(at: SIMD3<Float>(spawnX, y, 0))
+            catchGrace = 10.0
         } else {
             world.godRed.spawn(at: SIMD3<Float>(behind.x, y, behind.z))
+            catchGrace = 6.0
         }
         redChasing = true
-        catchGrace = 5.0
         onMessage?("GOD RED is behind you — RUN!")
     }
 
@@ -421,14 +423,15 @@ final class GameDirector {
                 // Through the door, turn LEFT into the second hall (+Z).
                 var p = self.world.player.position
                 p.x = self.world.run16km
-                p.z = 6
+                p.z = 10
                 // yaw = π → forward is +Z (left turn when you were running +X).
                 self.world.player.place(at: p, yaw: Float.pi)
                 self.roomPhase = .run8km
-                self.world.godRed.spawn(at: SIMD3<Float>(self.world.run16km - 25, self.world.roomY, 0))
+                // Keep Red far back in the first hall so he does not eat you at the corner.
+                self.world.godRed.spawn(at: SIMD3<Float>(self.world.run16km - 120, self.world.roomY, 0))
                 self.redChasing = true
-                self.catchGrace = 4.0
-                self.onMessage?("Door broken! Turn LEFT and RUN!")
+                self.catchGrace = 14.0
+                self.onMessage?("Door broken! Turn LEFT and RUN — you have time!")
                 self.showBeam(at: self.world.exitDoorPos)
             }
         }
@@ -542,7 +545,7 @@ final class GameDirector {
                 // GOD RED climbs out of the hole behind you.
                 self.world.godRed.spawn(at: self.world.redHoleSpawn)
                 self.redChasing = true
-                self.catchGrace = 6.0
+                self.catchGrace = 10.0
                 self.onMessage?("GOD RED comes from the hole — RUN 2 kilometers!")
                 self.onObjective?("OBJECTIVE 3\nGOD RED from the hole — run 2 km, then turn LEFT")
                 self.showBeam(at: self.world.breakDoorPos)

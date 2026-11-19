@@ -53,10 +53,10 @@ final class GameWorld {
     let finalPortableLeverSpots = [SIMD3<Float>(-30, 0, 55),
                                    SIMD3<Float>(25, 0, 60)]
 
-    // Metal room: Red from the hole → run 2 km → metal door → turn left → run 1 km → gate.
+    // Metal room: Red from the hole → run 2 km → metal door → turn left → short final hall → gate.
     let roomY: Float = -14
     let run16km: Float = 2_000   // first hall (2 km)
-    let run8km: Float = 1_000    // after left turn at the door
+    let run8km: Float = 400      // short left hall after the door (easy to finish)
     let hallwayWidth: Float = 5
     var metalRoomSpawn: SIMD3<Float> { SIMD3<Float>(8, roomY, 0) }
     /// Hole entrance behind you — where GOD RED climbs out.
