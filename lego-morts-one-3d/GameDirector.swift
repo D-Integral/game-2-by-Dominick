@@ -3,13 +3,10 @@
 //  lego-morts-one-3d
 //
 //  Objectives:
-//  1 Collect 20 metals
-//  2 Metal house deposit + roads
-//  3 Metal room: rock cutscene → 16 km run → 8 km other way → close gate
-//  4 Giant house (1000): 3 levers, 10 lockers, Sonnelves, return to little metal room
-//  5 Escape village in 2:30 or die
-//  6 Final levers
-//  7 Elevator end
+//  1–5 early game … escape village
+//  6 Sonnelves zigzag house (speed 18, crouch/jump)
+//  7 Glytcher cave — jump over electrified water ×10
+//  8 Glytcher boss — freeze+cut ×4, seal door, elevator win
 //
 
 import UIKit
@@ -21,6 +18,9 @@ enum Killer {
     case sonnelves
     case hole
     case timeout
+    case glitch
+    case electric
+    case glytcher
 }
 
 final class GameDirector {
@@ -31,11 +31,14 @@ final class GameDirector {
         case metalRoom
         case giantHouse
         case escapeVillage
-        case findFinalLevers
-        case elevatorEnd
+        case sonnelvesZigzag
+        case glytcherCave
+        case glytcherBoss
         case won
         // Kept for older Continue saves
         case escapeRed = 100
+        case findFinalLevers = 101
+        case elevatorEnd = 102
     }
 
     private enum MetalRoomPhase {
@@ -61,8 +64,10 @@ final class GameDirector {
     private var tookWaterLever = false
     private var waitingEscapeDoor = false
 
-    private var finalLeversCarried = 0
-    private var finalLeversPlaced = 0
+    private var bossCycles = 0
+    private var glytcherFrozen = false
+    private var freezeReady = true
+    private var awaitingDoorSeal = false
 
     private(set) var isDead = false
     private var surviveTimer: Float = 0
@@ -75,13 +80,16 @@ final class GameDirector {
 
     private(set) var redChasing = false
     private var sonChasing = false
+    private var glytcherChasing = false
     /// Seconds after Red starts chasing before he can catch you (stops instant death).
     private var catchGrace: Float = 0
 
     private let playerSpeed: Float = 21
-    private let redSpeed: Float = 18          // village chase — still beatable
-    private let redSpeedMetal: Float = 9      // metal hall: much slower so you can survive
+    private let redSpeed: Float = 18
+    private let redSpeedMetal: Float = 9
     private let sonSpeed: Float = 16
+    private let sonSpeedZigzag: Float = 18
+    private let glytcherSpeed: Float = 15
     private let catchRadius: Float = 1.8
     private let catchRadiusMetal: Float = 1.5
     private let pickupRadius: Float = 2.2
@@ -98,6 +106,14 @@ final class GameDirector {
     var onInteractHint: ((String?) -> Void)?
     var onCutscene: ((CutsceneKind, @escaping () -> Void) -> Void)?
     var onSaveProgress: ((Int) -> Void)?
+    var onActionButtons: ((ActionButtons) -> Void)?
+
+    struct ActionButtons {
+        var jump = false
+        var crouch = false
+        var freeze = false
+        var cut = false
+    }
 
     enum CutsceneKind {
         case wakeVillage
@@ -105,6 +121,8 @@ final class GameDirector {
         case redBreaksDoor
         case sonnelvesCeiling
         case escapeVillage
+        case glytcherAppears
+        case bossIntro
     }
 
     private var lastHUD = ""
@@ -119,11 +137,73 @@ final class GameDirector {
         isDead = false
         fullReset()
         if let raw = objectiveRaw, let saved = Objective(rawValue: raw), saved != .won {
-            let mapped = (saved == .escapeRed) ? .escapeVillage : saved
+            var mapped = saved
+            if saved == .escapeRed { mapped = .escapeVillage }
+            if saved == .findFinalLevers || saved == .elevatorEnd { mapped = .sonnelvesZigzag }
             restore(to: mapped)
         } else {
             enter(.collectMetal, playWake: true)
         }
+    }
+
+    func tapJump() {
+        let floor: Float = world.inMetalRoom ? world.roomY : 0
+        _ = world.player.jump(floorY: floor)
+    }
+
+    func tapCrouch() {
+        world.player.toggleCrouch()
+    }
+
+    func tapFreeze() {
+        guard objective == .glytcherBoss, freezeReady, !awaitingDoorSeal else { return }
+        freezeReady = false
+        glytcherFrozen = true
+        world.glytcher.setFrozen(true)
+        glytcherChasing = false
+        onMessage?("GLYTCHER frozen!")
+        setActionButtons()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 4.0) { [weak self] in
+            guard let self, self.objective == .glytcherBoss, !self.awaitingDoorSeal else { return }
+            if self.glytcherFrozen {
+                self.glytcherFrozen = false
+                self.world.glytcher.setFrozen(false)
+                self.glytcherChasing = true
+                self.onMessage?("GLYTCHER thaws!")
+            }
+            self.freezeReady = true
+            self.setActionButtons()
+        }
+    }
+
+    func tapCut() {
+        guard objective == .glytcherBoss, glytcherFrozen, !awaitingDoorSeal else {
+            if objective == .glytcherBoss && !glytcherFrozen {
+                onMessage?("Freeze GLYTCHER first!")
+            }
+            return
+        }
+        bossCycles += 1
+        world.runHeadMachine()
+        onMessage?("Cut! (\(bossCycles)/4) — he is still alive...")
+        glytcherFrozen = false
+        freezeReady = true
+        world.glytcher.setFrozen(false)
+        if bossCycles >= 4 {
+            awaitingDoorSeal = true
+            glytcherChasing = false
+            world.glytcher.park()
+            onMessage?("Now close the metal door OUTSIDE the cave!")
+            showBeam(at: world.caveDoorOutsidePos)
+            onObjective?("OBJECTIVE 8\nSeal the cave door — then take the elevator")
+        } else {
+            glytcherChasing = true
+            // Respawn a still-living Glytcher body
+            world.glytcher.resetBoss()
+            world.glytcher.spawn(at: world.bossArenaOrigin)
+        }
+        setActionButtons()
+        setHUD("Freeze + cut GLYTCHER: \(min(bossCycles, 4))/4")
     }
 
     func update(dt: Float, move: SIMD2<Float>) {
@@ -171,20 +251,23 @@ final class GameDirector {
         var delta = forward * move.y + right * move.x
         delta.y = 0
         let len = simd_length(delta)
-        guard len > 0.001 else { return }
-        delta = delta / len * playerSpeed * dt
-
-        var pos = world.player.position
-        if !world.isBlocked(x: pos.x + delta.x, z: pos.z) { pos.x += delta.x }
-        if !world.isBlocked(x: pos.x, z: pos.z + delta.z) { pos.z += delta.z }
-        if world.inMetalRoom {
-            pos.y = world.roomY
-        } else if world.isInWater(at: pos) {
-            pos.y = -0.6
-        } else {
-            pos.y = 0
+        if len > 0.001 {
+            delta = delta / len * playerSpeed * dt
+            var pos = world.player.position
+            if !world.isBlocked(x: pos.x + delta.x, z: pos.z) { pos.x += delta.x }
+            if !world.isBlocked(x: pos.x, z: pos.z + delta.z) { pos.z += delta.z }
+            world.player.position = pos
         }
-        world.player.position = pos
+
+        let floorY: Float
+        if world.inMetalRoom {
+            floorY = world.roomY
+        } else if world.isInWater(at: world.player.position) && world.endAreaActive == .none {
+            floorY = -0.6
+        } else {
+            floorY = 0
+        }
+        world.player.updateVertical(dt: dt, floorY: floorY)
     }
 
     private func updateHazardVisibility() {
@@ -237,10 +320,18 @@ final class GameDirector {
         }
 
         if sonChasing {
-            world.sonnelves.chase(toward: world.player.position, speed: sonSpeed, dt: dt, keepY: 0)
+            let speed = objective == .sonnelvesZigzag ? sonSpeedZigzag : sonSpeed
+            world.sonnelves.chase(toward: world.player.position, speed: speed, dt: dt, keepY: 0)
             world.sonnelves.updateWalk(dt: dt)
         } else {
             world.sonnelves.setRunning(false)
+        }
+
+        if glytcherChasing && !glytcherFrozen {
+            world.glytcher.chase(toward: world.player.position, speed: glytcherSpeed, dt: dt, keepY: 0)
+            world.glytcher.updateWalk(dt: dt)
+        } else {
+            world.glytcher.setRunning(false)
         }
     }
 
@@ -248,7 +339,6 @@ final class GameDirector {
         if world.player.isHiding { return }
         if catchGrace > 0 { return }
 
-        // Red cannot catch during the door smash or before the chase starts.
         let metalSafe = objective == .metalRoom &&
             (roomPhase == .goToHole || roomPhase == .rockCutscene ||
              roomPhase == .doorBreaking || world.gateClosed)
@@ -259,7 +349,37 @@ final class GameDirector {
         } else if sonChasing &&
                     world.sonnelves.groundDistance(to: world.player.position) < catchRadius {
             die(killedBy: .sonnelves)
+        } else if glytcherChasing && !glytcherFrozen &&
+                    world.glytcher.groundDistance(to: world.player.position) < catchRadius {
+            die(killedBy: .glytcher)
         }
+
+        // Zigzag glitch floor — must jump over
+        if objective == .sonnelvesZigzag && world.inGlitchZone(world.player.position) {
+            if world.player.position.y < 0.55 {
+                die(killedBy: .glitch)
+            }
+        }
+        // Cave electrified water
+        if objective == .glytcherCave && world.inElectrifiedWater(world.player.position) {
+            die(killedBy: .electric)
+        }
+    }
+
+    private func setActionButtons() {
+        var buttons = ActionButtons()
+        switch objective {
+        case .sonnelvesZigzag, .glytcherCave:
+            buttons.jump = true
+            buttons.crouch = (objective == .sonnelvesZigzag)
+        case .glytcherBoss:
+            buttons.freeze = !awaitingDoorSeal
+            buttons.cut = !awaitingDoorSeal
+            buttons.jump = true
+        default:
+            break
+        }
+        onActionButtons?(buttons)
     }
 
     /// Start Red behind you with a grace window so you can run away.
@@ -327,37 +447,49 @@ final class GameDirector {
             if !world.player.isHiding && reachedGoal(world.exitGoal) {
                 redChasing = false
                 world.godRed.park()
-                onMessage?("You escaped the village!")
-                enter(.findFinalLevers)
+                onMessage?("You escaped the village — into a house...")
+                enter(.sonnelvesZigzag)
             }
 
-        case .findFinalLevers:
-            for lever in world.finalPortableLevers where !lever.isHidden {
-                if dist(lever.simdPosition) < pickupRadius {
-                    lever.isHidden = true
-                    finalLeversCarried += 1
-                    onMessage?("Final lever \(finalLeversCarried)/2 taken!")
+        case .sonnelvesZigzag:
+            setHUD("SONNELVES (18)! Left/right ×10 — crouch & jump!")
+            if world.zigzagExitReached(world.player.position) {
+                sonChasing = false
+                world.sonnelves.park()
+                onMessage?("You escaped SONNELVES — a massive cave ahead...")
+                enter(.glytcherCave)
+            }
+
+        case .glytcherCave:
+            setHUD("GLYTCHER cave — run, jump the gaps ×10!")
+            if world.caveExitReached(world.player.position) {
+                glytcherChasing = false
+                world.glytcher.park()
+                onMessage?("Deeper in the cave — the boss fight...")
+                enter(.glytcherBoss)
+            }
+
+        case .glytcherBoss:
+            if awaitingDoorSeal {
+                setHUD("Close the cave metal door from OUTSIDE!")
+                if !world.caveDoorClosed && world.nearCaveDoorOutside(world.player.position) {
+                    onMessage?("You seal the cave door!")
+                    world.closeCaveDoor { [weak self] in
+                        self?.world.openCaveElevator()
+                        self?.showBeam(at: self?.world.caveElevatorWorldPos ?? .zero)
+                        self?.onMessage?("Elevator open — escape!")
+                        self?.setHUD("Enter the elevator to escape!")
+                    }
                 }
-            }
-            setHUD("Final levers carried: \(finalLeversCarried)/2")
-            if finalLeversCarried >= 2 {
-                enter(.elevatorEnd)
+                if world.caveElevatorOpen && dist(world.caveElevatorWorldPos) < 3.5 {
+                    win()
+                }
+            } else {
+                setHUD("Freeze + cut GLYTCHER: \(bossCycles)/4")
             }
 
-        case .elevatorEnd:
-            if finalLeversCarried > 0 && dist(world.finalDepositPos) < 4.5 {
-                finalLeversPlaced += finalLeversCarried
-                finalLeversCarried = 0
-                onMessage?("Levers set in place!")
-                world.openElevator()
-                showBeam(at: world.elevatorPos)
-            }
-            setHUD(world.elevatorOpen
-                   ? "Enter the elevator in the metal house!"
-                   : "Put the 2 levers by the metal house")
-            if world.elevatorOpen && dist(world.elevatorPos) < 3.5 {
-                win()
-            }
+        case .findFinalLevers, .elevatorEnd:
+            enter(.sonnelvesZigzag)
 
         case .won:
             break
@@ -583,6 +715,20 @@ final class GameDirector {
             } else if objective == .giantHouse {
                 hint = "Take 3 levers — hide from SONNELVES in lockers"
             }
+        } else if objective == .sonnelvesZigzag {
+            if world.inCrouchZone(world.player.position) {
+                hint = "CROUCH — Sonnelves broke the wall!"
+            } else if world.inGlitchZone(world.player.position) {
+                hint = "JUMP over the glitch particles!"
+            } else {
+                hint = "Zigzag left/right — Jump & Crouch buttons"
+            }
+        } else if objective == .glytcherCave {
+            hint = "Run the pads — JUMP the water gaps!"
+        } else if objective == .glytcherBoss {
+            hint = awaitingDoorSeal
+                ? "Seal the door outside, then elevator"
+                : "Freeze button, then Cut button (×4)"
         } else if objective == .metalRoom && roomPhase == .closeGate {
             hint = "Close the metal gate"
         } else if objective == .buildRoads && !broughtToHouse {
@@ -647,12 +793,28 @@ final class GameDirector {
                 self.playingCutscene = false
                 begin()
             }
+        } else if next == .glytcherCave {
+            playingCutscene = true
+            onCutscene?(.glytcherAppears) { [weak self] in
+                self?.playingCutscene = false
+                begin()
+            }
+        } else if next == .glytcherBoss {
+            playingCutscene = true
+            onCutscene?(.bossIntro) { [weak self] in
+                self?.playingCutscene = false
+                begin()
+            }
         } else {
             begin()
         }
     }
 
     private func configure(for next: Objective) {
+        world.showEndArea(.none)
+        glytcherChasing = false
+        setActionButtons()
+
         switch next {
         case .collectMetal:
             onObjective?("OBJECTIVE 1\nCollect 20 metals")
@@ -679,7 +841,6 @@ final class GameDirector {
             waitingEscapeDoor = false
             world.showGiantHouse(true)
             world.player.place(at: world.littleMetalRoomPos, yaw: 0)
-            // Sonnelves drops from the ceiling and hunts.
             world.sonnelves.spawn(at: SIMD3<Float>(world.giantHouseOrigin.x,
                                                    40,
                                                    world.giantHouseOrigin.z + 30))
@@ -697,19 +858,53 @@ final class GameDirector {
             showBeam(at: world.exitGoal)
             setHUD("Escape! 2:30 — hide in lockers!")
 
-        case .findFinalLevers:
-            onObjective?("OBJECTIVE 6\nTake 2 levers for the secret elevator")
-            finalLeversCarried = 0
-            finalLeversPlaced = 0
-            world.showFinalPortableLevers(true)
-            world.player.place(at: world.spawn, yaw: world.spawnYaw)
-            setHUD("Final levers carried: 0/2")
+        case .sonnelvesZigzag:
+            onObjective?("OBJECTIVE 6\nHouse chase — SONNELVES speed 18\nLeft/right ×10 — crouch & jump!")
+            world.showGiantHouse(false)
+            world.showEndArea(.zigzag)
+            world.player.place(at: world.zigzagOrigin, yaw: Float.pi)
+            world.sonnelves.spawn(at: SIMD3<Float>(world.zigzagOrigin.x,
+                                                   0,
+                                                   world.zigzagOrigin.z + 12))
+            sonChasing = true
+            catchGrace = 3
+            showBeam(at: world.zigzagEndPos)
+            setActionButtons()
+            setHUD("SONNELVES! Zigzag — crouch low, jump glitch floors!")
 
-        case .elevatorEnd:
-            onObjective?("OBJECTIVE 7\nPut 2 levers by the metal house — enter the elevator")
-            world.showElevator(true)
-            showBeam(at: world.finalDepositPos)
-            setHUD("Put the 2 levers by the metal house")
+        case .glytcherCave:
+            onObjective?("OBJECTIVE 7\nGLYTCHER cave — run, then jump ×10\nWater gaps kill!")
+            world.showEndArea(.cave)
+            if let first = world.cavePlatforms.first {
+                world.player.place(at: first, yaw: Float.pi)
+            }
+            world.glytcher.resetBoss()
+            world.glytcher.spawn(at: SIMD3<Float>(world.caveOrigin.x + 8, 0, world.caveOrigin.z - 20))
+            glytcherChasing = true
+            catchGrace = 4
+            if let last = world.cavePlatforms.last { showBeam(at: last) }
+            setActionButtons()
+            setHUD("Run → JUMP the water gaps ×10!")
+
+        case .glytcherBoss:
+            onObjective?("OBJECTIVE 8\nBOSS — freeze & cut GLYTCHER 4 times\nThen seal the door & elevator")
+            world.showEndArea(.boss)
+            bossCycles = 0
+            awaitingDoorSeal = false
+            glytcherFrozen = false
+            freezeReady = true
+            world.resetBossArenaState()
+            world.player.place(at: SIMD3<Float>(world.bossArenaOrigin.x,
+                                                0,
+                                                world.bossArenaOrigin.z + 10), yaw: Float.pi)
+            world.glytcher.spawn(at: world.bossArenaOrigin)
+            glytcherChasing = true
+            catchGrace = 3
+            setActionButtons()
+            setHUD("Freeze + cut GLYTCHER: 0/4")
+
+        case .findFinalLevers, .elevatorEnd:
+            configure(for: .sonnelvesZigzag)
 
         case .won:
             break
@@ -723,10 +918,12 @@ final class GameDirector {
         world.showLeverCarrySetup(false)
         world.showGiantHouse(false)
         world.showElevator(false)
+        world.showEndArea(.none)
         world.clearRoads()
         world.leaveMetalRoom()
         world.godRed.park()
         world.sonnelves.park()
+        world.glytcher.park()
         world.respawnPlayer()
 
         if saved.rawValue >= Objective.buildRoads.rawValue && saved.rawValue < 50 {
@@ -755,12 +952,14 @@ final class GameDirector {
         isDead = true
         redChasing = false
         sonChasing = false
+        glytcherChasing = false
         falling = false
         doorBreakStarted = false
         catchGrace = 0
         world.player.setHidden(false)
         world.godRed.setRunning(false)
         world.sonnelves.setRunning(false)
+        world.glytcher.setRunning(false)
         onDeath?(killedBy)
     }
 
@@ -776,8 +975,10 @@ final class GameDirector {
         world.player.setHidden(false)
         world.godRed.park()
         world.sonnelves.park()
+        world.glytcher.park()
         redChasing = false
         sonChasing = false
+        glytcherChasing = false
         falling = false
         doorBreakStarted = false
         world.leaveMetalRoom()
@@ -816,15 +1017,9 @@ final class GameDirector {
             spawnRedBehindPlayer()
             showBeam(at: world.exitGoal)
 
-        case .findFinalLevers:
-            finalLeversCarried = 0
-            world.showFinalPortableLevers(true)
-            world.player.place(at: world.spawn, yaw: world.spawnYaw)
-
-        case .elevatorEnd:
-            world.showElevator(true)
-            world.player.place(at: world.depositHouse, yaw: 0)
-            showBeam(at: world.finalDepositPos)
+        case .sonnelvesZigzag, .glytcherCave, .glytcherBoss, .findFinalLevers, .elevatorEnd:
+            // configure() re-places the player for these
+            break
 
         case .won:
             break
@@ -835,11 +1030,14 @@ final class GameDirector {
         objective = .won
         redChasing = false
         sonChasing = false
+        glytcherChasing = false
         world.godRed.park()
         world.sonnelves.park()
+        world.glytcher.park()
         world.goalBeam.isHidden = true
         world.player.setHidden(false)
         onSaveProgress?(-1)
+        onActionButtons?(ActionButtons())
         onWin?()
     }
 
@@ -856,8 +1054,10 @@ final class GameDirector {
         tookTunnelLever = false
         tookWaterLever = false
         waitingEscapeDoor = false
-        finalLeversCarried = 0
-        finalLeversPlaced = 0
+        bossCycles = 0
+        awaitingDoorSeal = false
+        glytcherFrozen = false
+        freezeReady = true
         falling = false
         doorBreakStarted = false
         cutsceneDoorPlayed = false
@@ -866,6 +1066,7 @@ final class GameDirector {
         roomPhase = .goToHole
         redChasing = false
         sonChasing = false
+        glytcherChasing = false
         world.forceNoHoles = false
         world.restoreAllMetals()
         world.restorePortableLevers()
@@ -873,6 +1074,7 @@ final class GameDirector {
         world.showFinalPortableLevers(false)
         world.showLeverCarrySetup(false)
         world.showGiantHouse(false)
+        world.showEndArea(.none)
         world.resetMetalDoor()
         world.showChoiceDoors(false)
         world.showElevator(false)
@@ -880,6 +1082,7 @@ final class GameDirector {
         world.leaveMetalRoom()
         world.godRed.park()
         world.sonnelves.park()
+        world.glytcher.park()
         world.respawnPlayer()
     }
 

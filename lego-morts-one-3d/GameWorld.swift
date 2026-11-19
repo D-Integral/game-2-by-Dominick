@@ -15,6 +15,7 @@ final class GameWorld {
     let player = Player()
     let godRed = DeuxRouge()
     let sonnelves = Sonnelves()
+    let glytcher = Glytcher()
 
     private(set) var metals: [SCNNode] = []
     private(set) var housePositions: [SIMD3<Float>] = []
@@ -108,6 +109,40 @@ final class GameWorld {
     private(set) var elevatorRoot = SCNNode()
     private var finalDepositSlots: SCNNode?
 
+    // End-game areas (after village escape)
+    let zigzagOrigin = SIMD3<Float>(0, 0, -110)
+    let zigzagExit = SIMD3<Float>(0, 0, -280)
+    let caveOrigin = SIMD3<Float>(0, 0, -320)
+    let bossArenaOrigin = SIMD3<Float>(0, 0, -480)
+    private let zigzagRoot = SCNNode()
+    private let caveRoot = SCNNode()
+    private let bossRoot = SCNNode()
+    private var zigzagWalls: [(cx: Float, cz: Float, hw: Float, hd: Float)] = []
+    private var crouchZones: [(cx: Float, cz: Float, hw: Float, hd: Float)] = []
+    private var glitchZones: [(cx: Float, cz: Float, hw: Float, hd: Float)] = []
+    private(set) var cavePlatforms: [SIMD3<Float>] = []
+    private var caveWaterZones: [(cx: Float, cz: Float, hw: Float, hd: Float)] = []
+    var caveDoorRoot = SCNNode()
+    var caveDoorPanel = SCNNode()
+    var headMachineRoot = SCNNode()
+    var caveElevatorRoot = SCNNode()
+    private(set) var caveDoorClosed = false
+    private(set) var caveElevatorOpen = false
+    private(set) var endAreaActive: EndArea = .none
+
+    func resetBossArenaState() {
+        caveDoorClosed = false
+        caveElevatorOpen = false
+        caveElevatorRoot.isHidden = true
+        caveDoorPanel.removeAllActions()
+        caveDoorPanel.position = SCNVector3(3.6, 2.4, 0)
+        glytcher.resetBoss()
+    }
+
+    enum EndArea {
+        case none, zigzag, cave, boss
+    }
+
     init() {
         setupEnvironment()
         buildVillage()
@@ -123,6 +158,9 @@ final class GameWorld {
         placeFinalPortableLevers()
         buildGiantHouse()
         placeHazardHoles()
+        buildZigzagHouse()
+        buildGlytcherCave()
+        buildBossArena()
 
         scene.rootNode.addChildNode(roadsRoot)
 
@@ -131,8 +169,10 @@ final class GameWorld {
 
         godRed.park()
         sonnelves.park()
+        glytcher.park()
         scene.rootNode.addChildNode(godRed.node)
         scene.rootNode.addChildNode(sonnelves.node)
+        scene.rootNode.addChildNode(glytcher.node)
 
         goalBeam.isHidden = true
         scene.rootNode.addChildNode(goalBeam)
@@ -759,6 +799,41 @@ final class GameWorld {
             return false
         }
 
+        if endAreaActive == .zigzag {
+            for w in zigzagWalls {
+                if abs(x - w.cx) < w.hw && abs(z - w.cz) < w.hd { return true }
+            }
+            // Collapsed low passages — must crouch to enter.
+            if !player.isCrouching {
+                for c in crouchZones {
+                    if abs(x - c.cx) < c.hw && abs(z - c.cz) < c.hd { return true }
+                }
+            }
+            return false
+        }
+
+        if endAreaActive == .cave || endAreaActive == .boss {
+            // Soft bounds for cave/boss areas
+            if endAreaActive == .cave {
+                if abs(x - caveOrigin.x) > 35 || z > caveOrigin.z + 5 || z < caveOrigin.z - 230 {
+                    return true
+                }
+            }
+            if endAreaActive == .boss {
+                if abs(x - bossArenaOrigin.x) > 28 { return true }
+                // Allow the outside porch (door + elevator) past +Z.
+                let maxZ: Float = caveElevatorOpen ? 38 : (caveDoorClosed ? 34 : 28)
+                if z > bossArenaOrigin.z + maxZ || z < bossArenaOrigin.z - 28 {
+                    return true
+                }
+                if caveDoorClosed {
+                    let door = SIMD3<Float>(bossArenaOrigin.x, 0, bossArenaOrigin.z + 22)
+                    if abs(x - door.x) < 2.5 && abs(z - door.z) < 1.2 { return true }
+                }
+            }
+            return false
+        }
+
         // Giant house interior uses its own maze walls (much larger bounds).
         if giantHouseRoot?.isHidden == false {
             let o = giantHouseOrigin
@@ -1041,7 +1116,345 @@ final class GameWorld {
 
     func respawnPlayer() {
         leaveMetalRoom()
+        showEndArea(.none)
         player.place(at: spawn, yaw: spawnYaw)
         player.setHidden(false)
+    }
+
+    // MARK: - End-game: zigzag house, Glytcher cave, boss arena
+
+    private func buildZigzagHouse() {
+        zigzagRoot.name = "zigzagHouse"
+        zigzagRoot.isHidden = true
+        zigzagRoot.simdPosition = zigzagOrigin
+        scene.rootNode.addChildNode(zigzagRoot)
+        zigzagWalls.removeAll()
+        crouchZones.removeAll()
+        glitchZones.removeAll()
+
+        let wallMat = SCNMaterial()
+        wallMat.diffuse.contents = UIColor(red: 0.35, green: 0.28, blue: 0.2, alpha: 1)
+        wallMat.emission.contents = UIColor(white: 0.04, alpha: 1)
+
+        // Floor strip
+        let floor = SCNBox(width: 80, height: 0.4, length: 200, chamferRadius: 0)
+        floor.materials = [wallMat]
+        let floorNode = SCNNode(geometry: floor)
+        floorNode.position = SCNVector3(0, 0.1, -90)
+        zigzagRoot.addChildNode(floorNode)
+
+        // Build 10 alternating L/R corridors: L R L R L R L R L R
+        // Odd turns (1,3,5,7,9) = left; even = right.
+        // Crouch: 2nd left (turn 3) and 4th right (turn 8)
+        // Jump/glitch: 3rd left (turn 5) and 3rd right (turn 6)
+        var x: Float = 0
+        var z: Float = -5
+        let segLen: Float = 16
+        let hallW: Float = 4.5
+
+        func addWallBox(cx: Float, cz: Float, w: Float, d: Float, h: Float = 5) {
+            let box = SCNBox(width: CGFloat(w), height: CGFloat(h), length: CGFloat(d), chamferRadius: 0)
+            box.materials = [wallMat]
+            let n = SCNNode(geometry: box)
+            n.position = SCNVector3(cx, h * 0.5, cz)
+            zigzagRoot.addChildNode(n)
+            zigzagWalls.append((zigzagOrigin.x + cx, zigzagOrigin.z + cz, w * 0.5, d * 0.5))
+        }
+
+        // Outer shell sides will be per-segment
+        for i in 0..<10 {
+            let turnIndex = i + 1 // 1...10
+            let isLeft = turnIndex % 2 == 1
+            // Move forward in current facing before each turn corridor
+            // Pattern: start going -Z (deeper into house), then alternate lateral
+            let dx: Float = isLeft ? -segLen : segLen
+            let nextX = x + dx
+            let nextZ = z - segLen * 0.35
+
+            // Corridor along X for the turn
+            let midX = (x + nextX) * 0.5
+            let midZ = (z + nextZ) * 0.5
+            // Side walls of corridor
+            addWallBox(cx: midX, cz: midZ - hallW * 0.5, w: abs(dx) + 2, d: 0.5)
+            addWallBox(cx: midX, cz: midZ + hallW * 0.5, w: abs(dx) + 2, d: 0.5)
+
+            // Connecting north stub
+            addWallBox(cx: nextX - hallW * 0.5, cz: nextZ - 4, w: 0.5, d: 10)
+            addWallBox(cx: nextX + hallW * 0.5, cz: nextZ - 4, w: 0.5, d: 10)
+
+            if turnIndex == 3 || turnIndex == 8 {
+                // Collapsed low ceiling — crouch
+                addWallBox(cx: midX, cz: midZ, w: abs(dx) * 0.6, d: hallW * 0.8, h: 1.15)
+                crouchZones.append((zigzagOrigin.x + midX, zigzagOrigin.z + midZ,
+                                    abs(dx) * 0.35, hallW * 0.45))
+                // Debris look
+                let debris = LegoBuilder.brick(width: 2, height: 0.4, length: 2,
+                                               color: UIColor(white: 0.25, alpha: 1),
+                                               emission: UIColor(white: 0.05, alpha: 1))
+                debris.position = SCNVector3(midX, 0.4, midZ)
+                zigzagRoot.addChildNode(debris)
+            }
+
+            if turnIndex == 5 || turnIndex == 6 {
+                // Glitch particles on the floor
+                glitchZones.append((zigzagOrigin.x + midX, zigzagOrigin.z + midZ,
+                                    abs(dx) * 0.4, hallW * 0.4))
+                for _ in 0..<8 {
+                    let p = SCNNode(geometry: SCNBox(width: 0.35, height: 0.15, length: 0.35, chamferRadius: 0))
+                    let mat = SCNMaterial()
+                    mat.diffuse.contents = UIColor(red: 0.4, green: 1, blue: 0.3, alpha: 1)
+                    mat.emission.contents = UIColor(red: 0.3, green: 1, blue: 0.2, alpha: 1)
+                    p.geometry?.materials = [mat]
+                    p.position = SCNVector3(midX + Float.random(in: -3...3), 0.2,
+                                            midZ + Float.random(in: -1.5...1.5))
+                    let flicker = SCNAction.repeatForever(SCNAction.sequence([
+                        SCNAction.fadeOpacity(to: 0.2, duration: 0.15),
+                        SCNAction.fadeOpacity(to: 1, duration: 0.15)
+                    ]))
+                    p.runAction(flicker)
+                    zigzagRoot.addChildNode(p)
+                }
+            }
+
+            x = nextX
+            z = nextZ - 8
+        }
+
+        let exitPad = LegoBuilder.brick(width: 3, height: 0.3, length: 3,
+                                        color: UIColor(red: 0.2, green: 0.8, blue: 0.4, alpha: 1),
+                                        emission: UIColor(red: 0.1, green: 0.4, blue: 0.2, alpha: 1))
+        exitPad.position = SCNVector3(x, 0.3, z - 4)
+        zigzagRoot.addChildNode(exitPad)
+        zigzagEndPos = SIMD3<Float>(zigzagOrigin.x + x, 0, zigzagOrigin.z + z - 4)
+    }
+
+    private(set) var zigzagEndPos = SIMD3<Float>(0, 0, -280)
+
+    private func buildGlytcherCave() {
+        caveRoot.name = "glytcherCave"
+        caveRoot.isHidden = true
+        caveRoot.simdPosition = caveOrigin
+        scene.rootNode.addChildNode(caveRoot)
+
+        let rock = SCNMaterial()
+        rock.diffuse.contents = UIColor(white: 0.22, alpha: 1)
+        rock.emission.contents = UIColor(white: 0.04, alpha: 1)
+
+        let wMat = SCNMaterial()
+        wMat.diffuse.contents = UIColor(red: 0.1, green: 0.4, blue: 1.0, alpha: 0.55)
+        wMat.emission.contents = UIColor(red: 0.2, green: 0.6, blue: 1.0, alpha: 1)
+        wMat.transparency = 0.45
+
+        // Run → jump → run ×10: solid pads with narrow electrified gaps between them.
+        let padLen: Float = 14
+        let gapLen: Float = 4.5
+        let padW: Float = 10
+        let jumps = 10
+        cavePlatforms.removeAll()
+        caveWaterZones.removeAll()
+
+        var z: Float = -4
+        for _ in 0..<jumps {
+            // Solid run pad
+            let pad = SCNBox(width: CGFloat(padW), height: 0.5, length: CGFloat(padLen), chamferRadius: 0)
+            pad.materials = [rock]
+            let padNode = SCNNode(geometry: pad)
+            padNode.position = SCNVector3(0, 0.15, z - padLen * 0.5)
+            caveRoot.addChildNode(padNode)
+            let padCenter = SIMD3<Float>(caveOrigin.x, 0, caveOrigin.z + z - padLen * 0.5)
+            cavePlatforms.append(padCenter)
+
+            z -= padLen
+
+            // Narrow water gap to jump
+            let water = SCNBox(width: CGFloat(padW + 2), height: 0.35, length: CGFloat(gapLen), chamferRadius: 0)
+            water.materials = [wMat]
+            let waterNode = SCNNode(geometry: water)
+            waterNode.position = SCNVector3(0, -0.15, z - gapLen * 0.5)
+            caveRoot.addChildNode(waterNode)
+            caveWaterZones.append((
+                caveOrigin.x,
+                caveOrigin.z + z - gapLen * 0.5,
+                (padW + 2) * 0.5,
+                gapLen * 0.5
+            ))
+
+            // Dim pit under the gap so it reads as a hole of water
+            let pit = SCNBox(width: CGFloat(padW + 2), height: 1.2, length: CGFloat(gapLen), chamferRadius: 0)
+            let pitMat = SCNMaterial()
+            pitMat.diffuse.contents = UIColor(white: 0.05, alpha: 1)
+            pit.materials = [pitMat]
+            let pitNode = SCNNode(geometry: pit)
+            pitNode.position = SCNVector3(0, -0.9, z - gapLen * 0.5)
+            caveRoot.addChildNode(pitNode)
+
+            z -= gapLen
+        }
+
+        // Final landing pad after the 10th jump
+        let endPad = SCNBox(width: CGFloat(padW), height: 0.5, length: CGFloat(padLen), chamferRadius: 0)
+        endPad.materials = [rock]
+        let endNode = SCNNode(geometry: endPad)
+        endNode.position = SCNVector3(0, 0.15, z - padLen * 0.5)
+        caveRoot.addChildNode(endNode)
+        cavePlatforms.append(SIMD3<Float>(caveOrigin.x, 0, caveOrigin.z + z - padLen * 0.5))
+
+        // Side walls along the path
+        let totalDepth = Float(jumps) * (padLen + gapLen) + padLen + 8
+        for side in [-1.0, 1.0] as [Float] {
+            let wall = SCNBox(width: 1.2, height: 8, length: CGFloat(totalDepth), chamferRadius: 0)
+            wall.materials = [rock]
+            let wallNode = SCNNode(geometry: wall)
+            wallNode.position = SCNVector3(side * (padW * 0.5 + 1.5), 4, -totalDepth * 0.5)
+            caveRoot.addChildNode(wallNode)
+        }
+    }
+
+    private func buildBossArena() {
+        bossRoot.name = "bossArena"
+        bossRoot.isHidden = true
+        bossRoot.simdPosition = bossArenaOrigin
+        scene.rootNode.addChildNode(bossRoot)
+
+        let mat = SCNMaterial()
+        mat.diffuse.contents = UIColor(white: 0.22, alpha: 1)
+        mat.emission.contents = UIColor(white: 0.05, alpha: 1)
+
+        let floor = SCNBox(width: 50, height: 0.5, length: 50, chamferRadius: 0)
+        floor.materials = [mat]
+        let floorNode = SCNNode(geometry: floor)
+        floorNode.position = SCNVector3(0, 0.1, 0)
+        bossRoot.addChildNode(floorNode)
+
+        // Arena walls
+        for (dx, dz, w, l) in [
+            (Float(0), Float(-24), Float(50), Float(1.5)),
+            (Float(0), Float(24), Float(50), Float(1.5)),
+            (Float(-24), Float(0), Float(1.5), Float(50)),
+            (Float(24), Float(0), Float(1.5), Float(50))
+        ] as [(Float, Float, Float, Float)] {
+            let box = SCNBox(width: CGFloat(w), height: 10, length: CGFloat(l), chamferRadius: 0)
+            box.materials = [mat]
+            let n = SCNNode(geometry: box)
+            n.position = SCNVector3(dx, 5, dz)
+            bossRoot.addChildNode(n)
+        }
+
+        // Head-cutting machine
+        headMachineRoot = SCNNode()
+        let base = LegoBuilder.brick(width: 3, height: 1, length: 3,
+                                     color: UIColor(white: 0.3, alpha: 1),
+                                     emission: UIColor(red: 0.5, green: 0.1, blue: 0.1, alpha: 1))
+        headMachineRoot.addChildNode(base)
+        let blade = LegoBuilder.brick(width: 0.3, height: 2.5, length: 1.2,
+                                      color: UIColor(white: 0.7, alpha: 1),
+                                      emission: UIColor(white: 0.3, alpha: 1))
+        blade.position = SCNVector3(0, 2, 0)
+        blade.name = "blade"
+        headMachineRoot.addChildNode(blade)
+        headMachineRoot.position = SCNVector3(8, 0, 0)
+        bossRoot.addChildNode(headMachineRoot)
+
+        // Cave exit metal door (close from outside after 4 freeze+cuts)
+        let door = Props.metalDoor()
+        caveDoorRoot = door.root
+        caveDoorPanel = door.doorPanel
+        caveDoorRoot.position = SCNVector3(0, 0, 22)
+        caveDoorPanel.position = SCNVector3(3.6, 2.4, 0) // open until sealed
+        bossRoot.addChildNode(caveDoorRoot)
+        caveDoorClosed = false
+
+        // Escape elevator outside / at edge
+        let elev = Props.choiceDoor(labelColor: UIColor(red: 0.3, green: 1, blue: 0.6, alpha: 1))
+        caveElevatorRoot = elev.root
+        caveElevatorRoot.position = SCNVector3(0, 0, 30)
+        elev.doorPanel.position = SCNVector3(0, 2.4, 0)
+        caveElevatorRoot.isHidden = true
+        bossRoot.addChildNode(caveElevatorRoot)
+        caveElevatorOpen = false
+    }
+
+    func showEndArea(_ area: EndArea) {
+        endAreaActive = area
+        zigzagRoot.isHidden = area != .zigzag
+        caveRoot.isHidden = area != .cave
+        bossRoot.isHidden = area != .boss
+        forceNoHoles = area != .none
+        if area != .none {
+            setHazardHolesVisible(false)
+        }
+    }
+
+    func inCrouchZone(_ point: SIMD3<Float>) -> Bool {
+        crouchZones.contains { abs(point.x - $0.cx) < $0.hw && abs(point.z - $0.cz) < $0.hd }
+    }
+
+    func inGlitchZone(_ point: SIMD3<Float>) -> Bool {
+        glitchZones.contains { abs(point.x - $0.cx) < $0.hw && abs(point.z - $0.cz) < $0.hd }
+    }
+
+    func onCavePlatform(_ point: SIMD3<Float>) -> Bool {
+        // Safe if not over a water gap (run pads are solid ground).
+        !caveWaterZones.contains {
+            abs(point.x - $0.cx) < $0.hw && abs(point.z - $0.cz) < $0.hd
+        }
+    }
+
+    func inElectrifiedWater(_ point: SIMD3<Float>) -> Bool {
+        guard endAreaActive == .cave else { return false }
+        guard point.y < 0.85 else { return false } // mid-jump clears the gap
+        return caveWaterZones.contains {
+            abs(point.x - $0.cx) < $0.hw && abs(point.z - $0.cz) < $0.hd
+        }
+    }
+
+    func caveExitReached(_ point: SIMD3<Float>) -> Bool {
+        guard let last = cavePlatforms.last else { return false }
+        return abs(point.x - last.x) < 5 && abs(point.z - last.z) < 6
+    }
+
+    func zigzagExitReached(_ point: SIMD3<Float>) -> Bool {
+        abs(point.x - zigzagEndPos.x) < 4 && abs(point.z - zigzagEndPos.z) < 4
+    }
+
+    func runHeadMachine() {
+        if let blade = headMachineRoot.childNode(withName: "blade", recursively: false) {
+            blade.runAction(SCNAction.sequence([
+                SCNAction.moveBy(x: 0, y: -1.2, z: 0, duration: 0.25),
+                SCNAction.moveBy(x: 0, y: 1.2, z: 0, duration: 0.25)
+            ]))
+        }
+        glytcher.cutHead()
+    }
+
+    func closeCaveDoor(completion: (() -> Void)? = nil) {
+        caveDoorClosed = true
+        let close = SCNAction.move(to: SCNVector3(0, 2.4, 0), duration: 0.45)
+        caveDoorPanel.runAction(close) {
+            DispatchQueue.main.async { completion?() }
+        }
+    }
+
+    func openCaveElevator() {
+        caveElevatorOpen = true
+        caveElevatorRoot.isHidden = false
+        caveElevatorRoot.enumerateChildNodes { node, _ in
+            if let box = node.geometry as? SCNBox, abs(box.width - 3.2) < 0.01 {
+                node.runAction(SCNAction.move(to: SCNVector3(3.6, 2.4, 0), duration: 0.5))
+            }
+        }
+    }
+
+    var caveElevatorWorldPos: SIMD3<Float> {
+        SIMD3<Float>(bossArenaOrigin.x, 0, bossArenaOrigin.z + 30)
+    }
+
+    var caveDoorOutsidePos: SIMD3<Float> {
+        SIMD3<Float>(bossArenaOrigin.x, 0, bossArenaOrigin.z + 26)
+    }
+
+    func nearCaveDoorOutside(_ point: SIMD3<Float>) -> Bool {
+        simd_length(SIMD2<Float>(point.x - caveDoorOutsidePos.x,
+                                 point.z - caveDoorOutsidePos.z)) < 4
     }
 }

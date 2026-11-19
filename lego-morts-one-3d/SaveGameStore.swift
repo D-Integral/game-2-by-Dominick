@@ -93,8 +93,10 @@ enum SaveGameStore {
         case .metalRoom: return "Obj 3 — Metal room chase"
         case .giantHouse: return "Obj 4 — Giant house levers"
         case .escapeVillage, .escapeRed: return "Obj 5 — Escape village"
-        case .findFinalLevers: return "Obj 6 — Final levers"
-        case .elevatorEnd: return "Obj 7 — Elevator escape"
+        case .sonnelvesZigzag: return "Obj 6 — Sonnelves zigzag house"
+        case .glytcherCave: return "Obj 7 — Glytcher cave"
+        case .glytcherBoss: return "Obj 8 — Glytcher boss"
+        case .findFinalLevers, .elevatorEnd: return "Obj 6 — Sonnelves zigzag house"
         case .won: return "Completed"
         case .none: return "Unknown objective"
         }

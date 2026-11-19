@@ -45,6 +45,10 @@ final class GameViewController: UIViewController {
     private let jumpscareView = UIView()
     private let jumpscareLabel = UILabel()
     private let winView = UIView()
+    private let jumpButton = UIButton(type: .system)
+    private let crouchButton = UIButton(type: .system)
+    private let freezeButton = UIButton(type: .system)
+    private let cutButton = UIButton(type: .system)
 
     private var clearMessageWork: DispatchWorkItem?
 
@@ -111,6 +115,14 @@ final class GameViewController: UIViewController {
                 SaveGameStore.markActiveFinished()
             } else {
                 SaveGameStore.updateActive(objectiveRaw: raw)
+            }
+        }
+        director.onActionButtons = { [weak self] buttons in
+            Self.onMain {
+                self?.jumpButton.isHidden = !buttons.jump
+                self?.crouchButton.isHidden = !buttons.crouch
+                self?.freezeButton.isHidden = !buttons.freeze
+                self?.cutButton.isHidden = !buttons.cut
             }
         }
     }
@@ -207,11 +219,12 @@ final class GameViewController: UIViewController {
         winView.isUserInteractionEnabled = false
         winView.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(winView)
-        let winLabel = makeOverlayLabel("YOU ESCAPED!\n\nYou fled the village.\n\nTap to play again")
+        let winLabel = makeOverlayLabel("YOU ESCAPED!\n\nYou sealed GLYTCHER in the cave\nand rode the elevator out.\n\nTap to play again")
         winLabel.textColor = UIColor(red: 0.6, green: 1.0, blue: 0.7, alpha: 1)
         winView.addSubview(winLabel)
         pinCenter(winLabel, in: winView)
 
+        setupActionButtons()
         setGameplayHUDHidden(true)
 
         NSLayoutConstraint.activate([
@@ -250,6 +263,46 @@ final class GameViewController: UIViewController {
             winView.trailingAnchor.constraint(equalTo: view.trailingAnchor)
         ])
     }
+
+    private func setupActionButtons() {
+        func styleAction(_ b: UIButton, title: String, color: UIColor) {
+            b.setTitle(title, for: .normal)
+            b.titleLabel?.font = .systemFont(ofSize: 16, weight: .bold)
+            b.setTitleColor(.white, for: .normal)
+            b.backgroundColor = color
+            b.layer.cornerRadius = 10
+            b.isHidden = true
+            b.translatesAutoresizingMaskIntoConstraints = false
+            view.addSubview(b)
+            b.widthAnchor.constraint(equalToConstant: 88).isActive = true
+            b.heightAnchor.constraint(equalToConstant: 44).isActive = true
+        }
+        styleAction(jumpButton, title: "JUMP", color: UIColor(red: 0.1, green: 0.45, blue: 0.85, alpha: 0.92))
+        styleAction(crouchButton, title: "CROUCH", color: UIColor(red: 0.35, green: 0.35, blue: 0.15, alpha: 0.92))
+        styleAction(freezeButton, title: "FREEZE", color: UIColor(red: 0.15, green: 0.45, blue: 0.9, alpha: 0.92))
+        styleAction(cutButton, title: "CUT", color: UIColor(red: 0.7, green: 0.1, blue: 0.15, alpha: 0.92))
+
+        jumpButton.addTarget(self, action: #selector(tapJump), for: .touchUpInside)
+        crouchButton.addTarget(self, action: #selector(tapCrouch), for: .touchUpInside)
+        freezeButton.addTarget(self, action: #selector(tapFreeze), for: .touchUpInside)
+        cutButton.addTarget(self, action: #selector(tapCut), for: .touchUpInside)
+
+        NSLayoutConstraint.activate([
+            jumpButton.trailingAnchor.constraint(equalTo: view.safeAreaLayoutGuide.trailingAnchor, constant: -16),
+            jumpButton.bottomAnchor.constraint(equalTo: view.safeAreaLayoutGuide.bottomAnchor, constant: -56),
+            crouchButton.trailingAnchor.constraint(equalTo: jumpButton.trailingAnchor),
+            crouchButton.bottomAnchor.constraint(equalTo: jumpButton.topAnchor, constant: -10),
+            freezeButton.trailingAnchor.constraint(equalTo: jumpButton.trailingAnchor),
+            freezeButton.bottomAnchor.constraint(equalTo: crouchButton.topAnchor, constant: -10),
+            cutButton.trailingAnchor.constraint(equalTo: jumpButton.trailingAnchor),
+            cutButton.bottomAnchor.constraint(equalTo: freezeButton.topAnchor, constant: -10)
+        ])
+    }
+
+    @objc private func tapJump() { director.tapJump() }
+    @objc private func tapCrouch() { director.tapCrouch() }
+    @objc private func tapFreeze() { director.tapFreeze() }
+    @objc private func tapCut() { director.tapCut() }
 
     private func setGameplayHUDHidden(_ hidden: Bool) {
         objectiveLabel.isHidden = hidden
@@ -372,6 +425,28 @@ final class GameViewController: UIViewController {
                       duration: 4.5,
                       background: UIColor(red: 0.08, green: 0.02, blue: 0.02, alpha: 1))
             ]
+        case .glytcherAppears:
+            beats = [
+                .init(title: "THE CAVE",
+                      body: "A massive cave opens.\nSomething glitches in the dark.\nIts name is GLYTCHER.",
+                      duration: 4.0,
+                      background: UIColor(red: 0.05, green: 0.15, blue: 0.08, alpha: 1)),
+                .init(title: "ELECTRIFIED WATER",
+                      body: "Run the path. Jump the gaps — ten times.\nTouch the water and you die.\nGLYTCHER is hunting.",
+                      duration: 4.0,
+                      background: UIColor(red: 0.05, green: 0.1, blue: 0.3, alpha: 1))
+            ]
+        case .bossIntro:
+            beats = [
+                .init(title: "BOSS FIGHT",
+                      body: "GLYTCHER again.\nFreeze him. Cut him.\nFour times — he still lives.",
+                      duration: 4.0,
+                      background: UIColor(red: 0.2, green: 0.05, blue: 0.25, alpha: 1)),
+                .init(title: "SEAL THE CAVE",
+                      body: "Use the machine. Cut his head.\nThen close the metal door outside.\nThe elevator is your only escape.",
+                      duration: 4.2,
+                      background: UIColor(red: 0.1, green: 0.1, blue: 0.12, alpha: 1))
+            ]
         }
         cutscenes.play(on: view, beats: beats, completion: completion)
     }
@@ -447,6 +522,14 @@ final class GameViewController: UIViewController {
         switch killedBy {
         case .godRed, .sonnelves, .hole, .timeout:
             jumpscareLabel.text = "GOD RED EATS YOUR HEAD\n\nSONNELVES TAKES YOUR HEART"
+        case .glitch:
+            jumpscareLabel.text = "GLITCH PARTICLES\nTEAR YOU APART\n\nGOD RED & SONNELVES FEAST"
+        case .electric:
+            jumpscareLabel.text = "ELECTRIFIED WATER\n\nGLYTCHER WATCHES YOU BURN"
+            jumpscareView.backgroundColor = UIColor(red: 0.05, green: 0.15, blue: 0.4, alpha: 1)
+        case .glytcher:
+            jumpscareLabel.text = "GLYTCHER\nCONSUMES YOU\n\nSTATIC AND SCREAMS"
+            jumpscareView.backgroundColor = UIColor(red: 0.15, green: 0.35, blue: 0.1, alpha: 1)
         }
         if killedBy == .hole {
             jumpscareLabel.text = "YOU LOOK UP...\n\nGOD RED EATS YOUR HEAD\nSONNELVES TAKES YOUR HEART"

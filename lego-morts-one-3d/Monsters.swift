@@ -256,3 +256,112 @@ final class Sonnelves: Chaser {
         node.addChildNode(mouth)
     }
 }
+
+// MARK: - Glytcher
+
+/// Glitchy end-game monster — flickers, jitters, and chases.
+final class Glytcher: Chaser {
+
+    let node = SCNNode()
+    private var parts: [SCNNode] = []
+    private var walkTime: Float = 0
+    private var isRunning = false
+    private(set) var isFrozen = false
+    private(set) var headCut = false
+    private var headNode: SCNNode!
+
+    init() { build() }
+
+    func setRunning(_ running: Bool) {
+        isRunning = running && !isFrozen
+    }
+
+    func updateWalk(dt: Float) {
+        guard isRunning, !isFrozen else { return }
+        walkTime += dt * 18
+        // Glitchy jitter
+        for (i, part) in parts.enumerated() {
+            let j = sin(walkTime * (1.5 + Float(i) * 0.3)) * 0.08
+            part.position.x += j * 0.02
+            part.opacity = CGFloat(0.55 + abs(sin(walkTime + Float(i))) * 0.45)
+        }
+        node.position.y = abs(sin(walkTime * 2)) * 0.15
+    }
+
+    func setFrozen(_ frozen: Bool) {
+        isFrozen = frozen
+        if frozen {
+            setRunning(false)
+            parts.forEach { $0.opacity = 0.35 }
+            node.enumerateChildNodes { n, _ in
+                if let mat = n.geometry?.materials.first {
+                    mat.emission.contents = UIColor(red: 0.2, green: 0.6, blue: 1.0, alpha: 1)
+                }
+            }
+        } else {
+            parts.forEach { $0.opacity = 1 }
+            node.enumerateChildNodes { n, _ in
+                if let mat = n.geometry?.materials.first {
+                    mat.emission.contents = UIColor(red: 0.4, green: 1.0, blue: 0.3, alpha: 1)
+                }
+            }
+        }
+    }
+
+    func cutHead() {
+        guard !headCut else { return }
+        headCut = true
+        headNode.runAction(SCNAction.group([
+            SCNAction.moveBy(x: 1.5, y: 2, z: -1, duration: 0.5),
+            SCNAction.rotateBy(x: 1, y: 2, z: 0.5, duration: 0.5),
+            SCNAction.fadeOut(duration: 0.6)
+        ]))
+    }
+
+    func resetBoss() {
+        headCut = false
+        setFrozen(false)
+        headNode.removeAllActions()
+        headNode.opacity = 1
+        headNode.position = SCNVector3(0, 3.5, 0)
+        headNode.eulerAngles = SCNVector3Zero
+    }
+
+    private func build() {
+        let green = UIColor(red: 0.35, green: 1.0, blue: 0.25, alpha: 1)
+        let purple = UIColor(red: 0.7, green: 0.2, blue: 1.0, alpha: 1)
+        let glow = UIColor(red: 0.4, green: 1.0, blue: 0.3, alpha: 1)
+
+        for i in 0..<5 {
+            let bit = LegoBuilder.brick(
+                width: CGFloat.random(in: 0.4...1.2),
+                height: CGFloat.random(in: 0.3...0.9),
+                length: CGFloat.random(in: 0.4...1.0),
+                color: i % 2 == 0 ? green : purple,
+                emission: glow
+            )
+            bit.position = SCNVector3(Float.random(in: -0.6...0.6),
+                                      Float(i) * 0.55 + 0.4,
+                                      Float.random(in: -0.3...0.3))
+            bit.eulerAngles = SCNVector3(Float.random(in: -0.4...0.4),
+                                         Float.random(in: -0.4...0.4),
+                                         Float.random(in: -0.4...0.4))
+            node.addChildNode(bit)
+            parts.append(bit)
+        }
+
+        headNode = LegoBuilder.brick(width: 1.4, height: 1.2, length: 1.2, color: green, emission: glow)
+        headNode.position = SCNVector3(0, 3.5, 0)
+        node.addChildNode(headNode)
+
+        for dx in [-0.35, 0.35] as [Float] {
+            let eye = SCNNode(geometry: SCNSphere(radius: 0.2))
+            let mat = SCNMaterial()
+            mat.diffuse.contents = UIColor.magenta
+            mat.emission.contents = UIColor(red: 1, green: 0, blue: 1, alpha: 1)
+            eye.geometry?.materials = [mat]
+            eye.position = SCNVector3(dx, 0.1, 0.65)
+            headNode.addChildNode(eye)
+        }
+    }
+}

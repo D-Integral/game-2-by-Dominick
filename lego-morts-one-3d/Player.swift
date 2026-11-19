@@ -16,7 +16,15 @@ final class Player {
 
     private(set) var yaw: Float = 0
     private(set) var pitch: Float = 0
-    let eyeHeight: Float = 2.3
+    let standingEyeHeight: Float = 2.3
+    let crouchEyeHeight: Float = 0.95
+    var eyeHeight: Float { isCrouching ? crouchEyeHeight : standingEyeHeight }
+
+    private(set) var isCrouching = false
+    private(set) var isJumping = false
+    private var verticalVelocity: Float = 0
+    private let jumpSpeed: Float = 9.5
+    private let gravity: Float = 22
 
     private let lookSensitivity: Float = 0.009
     private let maxPitch: Float = 1.35
@@ -25,7 +33,7 @@ final class Player {
         cameraNode.camera = SCNCamera()
         cameraNode.camera?.zFar = 2500
         cameraNode.camera?.fieldOfView = 75
-        cameraNode.position = SCNVector3(0, eyeHeight, 0)
+        cameraNode.position = SCNVector3(0, standingEyeHeight, 0)
         node.addChildNode(cameraNode)
 
         // Your flashlight: lights up whatever you look at.
@@ -57,8 +65,53 @@ final class Player {
         node.simdPosition = pos
         yaw = newYaw
         pitch = 0
-        node.eulerAngles.y = yaw
-        cameraNode.eulerAngles.x = 0
+        verticalVelocity = 0
+        isJumping = false
+        setCrouching(false)
+        node.eulerAngles = SCNVector3(0, yaw, 0)
+        cameraNode.eulerAngles = SCNVector3(0, 0, 0)
+        cameraNode.position = SCNVector3(0, eyeHeight, 0)
+    }
+
+    func setCrouching(_ crouch: Bool) {
+        isCrouching = crouch
+        let y = eyeHeight
+        cameraNode.removeAllActions()
+        cameraNode.runAction(SCNAction.move(to: SCNVector3(0, y, 0), duration: 0.12))
+    }
+
+    func toggleCrouch() {
+        setCrouching(!isCrouching)
+    }
+
+    /// Jump if on the ground (y near floorY).
+    @discardableResult
+    func jump(floorY: Float = 0) -> Bool {
+        guard !isJumping, abs(position.y - floorY) < 0.15 else { return false }
+        if isCrouching { setCrouching(false) }
+        isJumping = true
+        verticalVelocity = jumpSpeed
+        return true
+    }
+
+    /// Apply gravity / jump arc. Call each frame. Returns current ground Y used.
+    func updateVertical(dt: Float, floorY: Float = 0) {
+        var pos = position
+        if isJumping || pos.y > floorY + 0.01 {
+            verticalVelocity -= gravity * dt
+            pos.y += verticalVelocity * dt
+            if pos.y <= floorY {
+                pos.y = floorY
+                verticalVelocity = 0
+                isJumping = false
+            }
+            position = pos
+        } else {
+            pos.y = floorY
+            position = pos
+            isJumping = false
+            verticalVelocity = 0
+        }
     }
 
     var position: SIMD3<Float> {
